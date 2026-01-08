@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+#
+# curb - Claude Under Ralph + Beads
+#
+# Autonomous AI coding agent harness that drives Claude Code in a loop
+# to build software from a prd.json backlog with beads-style task tracking.
+#
+# Usage:
+#   curb              # Run loop until all tasks complete
+#   curb --once       # Run single iteration
+#   curb --status     # Show current task status
+#   curb --ready      # Show ready tasks
+#   curb --plan       # Run in planning mode (generate fix_plan.md)
+#
+set -euo pipefail
+
+CURB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${CURB_PROJECT_DIR:-$(pwd)}"
+
+# Source task management library
+source "${CURB_DIR}/lib/tasks.sh"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
+log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[curb]${NC} $1"; }
+log_error() { echo -e "${RED}[curb]${NC} $1" >&2; }
+
+# Check dependencies
+check_deps() {
+    local missing=()
+    command -v jq >/dev/null 2>&1 || missing+=("jq")
+    command -v claude >/dev/null 2>&1 || missing+=("claude (Claude Code CLI)")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_error "Missing dependencies: ${missing[*]}"
+        exit 1
+    fi
+}
+
+# Validate project structure
+validate_project() {
+    if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
+        log_error "No prd.json found in ${PROJECT_DIR}"
+        log_info "Run 'curb-init' to scaffold a new project"
+        exit 1
+    fi
+
+    if [[ ! -f "${PROJECT_DIR}/PROMPT.md" ]]; then
+        log_warn "No PROMPT.md found, using default template"
+        cp "${CURB_DIR}/templates/PROMPT.md" "${PROJECT_DIR}/PROMPT.md"
+    fi
+
+    if [[ ! -f "${PROJECT_DIR}/AGENT.md" ]]; then
+        log_warn "No AGENT.md found, using default template"
+        cp "${CURB_DIR}/templates/AGENT.md" "${PROJECT_DIR}/AGENT.md"
+    fi
+}
+
+# Show task status summary
+show_status() {
+    local prd="${PROJECT_DIR}/prd.json"
+
+    echo ""
+    log_info "Task Status Summary"
+    echo "===================="
+
+    local total=$(jq '.tasks | length' "$prd")
+    local closed=$(jq '[.tasks[] | select(.status == "closed")] | length' "$prd")
+    local in_progress=$(jq '[.tasks[] | select(.status == "in_progress")] | length' "$prd")
+    local open=$(jq '[.tasks[] | select(.status == "open")] | length' "$prd")
+
+    echo -e "Total:       ${total}"
+    echo -e "Closed:      ${GREEN}${closed}${NC}"
+    echo -e "In Progress: ${YELLOW}${in_progress}${NC}"
+    echo -e "Open:        ${open}"
+    echo ""
+
+    # Show by priority
+    log_info "By Priority"
+    for p in P0 P1 P2 P3 P4; do
+        local count=$(jq --arg p "$p" '[.tasks[] | select(.priority == $p and .status != "closed")] | length' "$prd")
+        if [[ "$count" -gt 0 ]]; then
+            echo "  ${p}: ${count} remaining"
+        fi
+    done
+    echo ""
+
+    # Progress bar
+    if [[ "$total" -gt 0 ]]; then
+        local pct=$((closed * 100 / total))
+        local filled=$((pct / 5))
+        local empty=$((20 - filled))
+        printf "Progress: ["
+        printf "%0.s#" $(seq 1 $filled 2>/dev/null) || true
+        printf "%0.s-" $(seq 1 $empty 2>/dev/null) || true
+        printf "] %d%%\n" "$pct"
+    fi
+}
+
+# Show ready tasks
+show_ready() {
+    local prd="${PROJECT_DIR}/prd.json"
+
+    log_info "Ready Tasks (unblocked, status=open)"
+    echo "======================================"
+
+    local ready=$(get_ready_tasks "$prd")
+
+    if [[ -z "$ready" || "$ready" == "null" ]]; then
+        log_warn "No ready tasks found"
+        return
+    fi
+
+    echo "$ready" | jq -r '.[] | "[\(.priority)] \(.id): \(.title)"'
+}
+
+# Generate the dynamic prompt for current iteration
+generate_prompt() {
+    local prd="${PROJECT_DIR}/prd.json"
+    local task_json="$1"
+
+    # Read base prompt template
+    local base_prompt
+    base_prompt=$(cat "${PROJECT_DIR}/PROMPT.md")
+
+    # Extract task details
+    local task_id=$(echo "$task_json" | jq -r '.id')
+    local task_title=$(echo "$task_json" | jq -r '.title')
+    local task_type=$(echo "$task_json" | jq -r '.type')
+    local task_desc=$(echo "$task_json" | jq -r '.description')
+    local task_criteria=$(echo "$task_json" | jq -r '.acceptanceCriteria // [] | join("\n- ")')
+
+    # Generate focused prompt
+    cat <<EOF
+${base_prompt}
+
+---
+## CURRENT TASK
+
+**Task ID**: ${task_id}
+**Type**: ${task_type}
+**Title**: ${task_title}
+
+**Description**:
+${task_desc}
+
+**Acceptance Criteria**:
+- ${task_criteria}
+
+---
+
+Focus on THIS TASK ONLY. When complete:
+1. Run all feedback loops (typecheck, test, lint)
+2. If passing, update prd.json: set status to "closed" for ${task_id}
+3. Commit with message: ${task_type}(${task_id}): ${task_title}
+4. Append learnings to progress.txt
+
+If ALL tasks in prd.json have status="closed", output: <promise>COMPLETE</promise>
+EOF
+}
+
+# Run a single iteration
+run_iteration() {
+    local prd="${PROJECT_DIR}/prd.json"
+
+    # Check for in-progress tasks first (resume interrupted work)
+    local current_task
+    current_task=$(jq '[.tasks[] | select(.status == "in_progress")] | first' "$prd")
+
+    if [[ "$current_task" != "null" && -n "$current_task" ]]; then
+        local task_id=$(echo "$current_task" | jq -r '.id')
+        log_warn "Resuming in-progress task: ${task_id}"
+    else
+        # Find next ready task
+        local ready_tasks
+        ready_tasks=$(get_ready_tasks "$prd")
+
+        if [[ -z "$ready_tasks" || "$ready_tasks" == "[]" ]]; then
+            # Check if we're done
+            local open_count=$(jq '[.tasks[] | select(.status != "closed")] | length' "$prd")
+            if [[ "$open_count" -eq 0 ]]; then
+                log_success "All tasks complete!"
+                return 0
+            else
+                log_error "No ready tasks but ${open_count} tasks not closed. Check dependencies."
+                return 1
+            fi
+        fi
+
+        # Pick highest priority ready task
+        current_task=$(echo "$ready_tasks" | jq 'first')
+        local task_id=$(echo "$current_task" | jq -r '.id')
+
+        log_info "Selected task: ${task_id}"
+
+        # Mark as in_progress
+        update_task_status "$prd" "$task_id" "in_progress"
+    fi
+
+    # Generate and run prompt
+    local prompt
+    prompt=$(generate_prompt "$current_task")
+
+    log_info "Running Claude Code..."
+    echo ""
+
+    # Run claude code with the prompt
+    # Using --print to allow the agent to complete autonomously
+    echo "$prompt" | claude --print
+
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        log_warn "Claude Code exited with code ${exit_code}"
+    fi
+
+    return $exit_code
+}
+
+# Run planning mode
+run_planning() {
+    local prd="${PROJECT_DIR}/prd.json"
+
+    log_info "Running in planning mode..."
+
+    local plan_prompt
+    plan_prompt=$(cat <<'EOF'
+Study @specs/* for specifications.
+Study @prd.json for the current task backlog.
+Study the existing source code.
+
+Your task is to analyze the codebase and update @fix_plan.md:
+
+1. Use subagents to study existing source code and compare against specifications
+2. Search for TODO comments, placeholder implementations, and missing functionality
+3. Create/update fix_plan.md with a prioritized bullet list of items to implement
+4. For each item, note:
+   - What needs to be done
+   - Which files are affected
+   - Dependencies on other items
+5. If you discover missing specifications, document them
+
+Think hard. Be thorough. Use many parallel subagents for research.
+EOF
+)
+
+    echo "$plan_prompt" | claude --print
+}
+
+# Main loop
+run_loop() {
+    local max_iterations="${CURB_MAX_ITERATIONS:-100}"
+    local iteration=0
+
+    log_info "Starting curb loop (max ${max_iterations} iterations)"
+    echo ""
+
+    while [[ $iteration -lt $max_iterations ]]; do
+        iteration=$((iteration + 1))
+        log_info "=== Iteration ${iteration} ==="
+
+        # Check if all tasks complete
+        local prd="${PROJECT_DIR}/prd.json"
+        local remaining=$(jq '[.tasks[] | select(.status != "closed")] | length' "$prd")
+
+        if [[ "$remaining" -eq 0 ]]; then
+            log_success "All tasks complete! Exiting loop."
+            show_status
+            return 0
+        fi
+
+        # Run single iteration
+        if ! run_iteration; then
+            log_warn "Iteration failed, continuing..."
+        fi
+
+        echo ""
+        log_info "Iteration ${iteration} complete. ${remaining} tasks remaining."
+        echo ""
+
+        # Brief pause between iterations to allow for interruption
+        sleep 2
+    done
+
+    log_warn "Reached max iterations (${max_iterations})"
+    show_status
+    return 1
+}
+
+# Main entry point
+main() {
+    check_deps
+
+    case "${1:-}" in
+        --status|-s)
+            validate_project
+            show_status
+            ;;
+        --ready|-r)
+            validate_project
+            show_ready
+            ;;
+        --once|-1)
+            validate_project
+            run_iteration
+            ;;
+        --plan|-p)
+            validate_project
+            run_planning
+            ;;
+        --help|-h)
+            cat <<EOF
+curb - Claude Under Ralph + Beads
+
+Autonomous AI coding agent harness that drives Claude Code in a loop.
+
+Usage:
+  curb              Run loop until all tasks complete
+  curb --once       Run single iteration
+  curb --status     Show current task status
+  curb --ready      Show ready tasks
+  curb --plan       Run in planning mode
+
+Environment:
+  CURB_PROJECT_DIR     Project directory (default: pwd)
+  CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
+
+Files expected in project:
+  prd.json       Task backlog (beads-style format)
+  PROMPT.md      Loop prompt template
+  AGENT.md       Agent build instructions
+  specs/         Specification files
+  progress.txt   Progress log (created automatically)
+EOF
+            ;;
+        *)
+            validate_project
+            run_loop
+            ;;
+    esac
+}
+
+main "$@"

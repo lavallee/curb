@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+#
+# curb-init - Initialize a project for curb
+#
+# Creates the necessary files and structure for curb to drive development.
+#
+set -euo pipefail
+
+CURB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${1:-.}"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log_info() { echo -e "${BLUE}[curb-init]${NC} $1"; }
+log_success() { echo -e "${GREEN}[curb-init]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[curb-init]${NC} $1"; }
+
+# Get project name from directory
+PROJECT_NAME=$(basename "$(cd "$PROJECT_DIR" && pwd)")
+PREFIX=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | head -c 8)
+[[ -z "$PREFIX" ]] && PREFIX="prd"
+
+log_info "Initializing curb in: ${PROJECT_DIR}"
+log_info "Project prefix: ${PREFIX}"
+
+cd "$PROJECT_DIR"
+
+# Create specs directory
+if [[ ! -d "specs" ]]; then
+    mkdir -p specs
+    log_success "Created specs/"
+fi
+
+# Create prd.json if not exists
+if [[ ! -f "prd.json" ]]; then
+    cat > prd.json <<EOF
+{
+  "projectName": "${PROJECT_NAME}",
+  "branchName": "feature/${PROJECT_NAME}",
+  "prefix": "${PREFIX}",
+  "tasks": [
+    {
+      "id": "${PREFIX}-init",
+      "type": "task",
+      "title": "Project initialization",
+      "description": "Set up the initial project structure and configuration",
+      "acceptanceCriteria": [
+        "Project builds successfully",
+        "Basic structure in place",
+        "typecheck passes",
+        "tests pass (or test framework configured)"
+      ],
+      "priority": "P0",
+      "status": "open",
+      "dependsOn": [],
+      "notes": ""
+    }
+  ]
+}
+EOF
+    log_success "Created prd.json with initial task"
+else
+    log_warn "prd.json already exists, skipping"
+fi
+
+# Create PROMPT.md
+if [[ ! -f "PROMPT.md" ]]; then
+    cp "${CURB_DIR}/templates/PROMPT.md" PROMPT.md
+    log_success "Created PROMPT.md"
+else
+    log_warn "PROMPT.md already exists, skipping"
+fi
+
+# Create AGENT.md
+if [[ ! -f "AGENT.md" ]]; then
+    cp "${CURB_DIR}/templates/AGENT.md" AGENT.md
+    log_success "Created AGENT.md"
+else
+    log_warn "AGENT.md already exists, skipping"
+fi
+
+# Create progress.txt
+if [[ ! -f "progress.txt" ]]; then
+    cat > progress.txt <<EOF
+# Progress Log
+Started: $(date -u +"%Y-%m-%d")
+
+## Codebase Patterns
+<!-- Agent adds discovered patterns here for future iterations -->
+
+## Key Files
+<!-- Important files to be aware of -->
+
+---
+EOF
+    log_success "Created progress.txt"
+else
+    log_warn "progress.txt already exists, skipping"
+fi
+
+# Create fix_plan.md
+if [[ ! -f "fix_plan.md" ]]; then
+    cat > fix_plan.md <<EOF
+# Fix Plan
+
+Discovered issues and planned improvements.
+Agent maintains this file during development.
+
+## High Priority
+
+## Medium Priority
+
+## Low Priority
+
+## Completed
+EOF
+    log_success "Created fix_plan.md"
+else
+    log_warn "fix_plan.md already exists, skipping"
+fi
+
+# Create .gitignore additions
+if [[ -f ".gitignore" ]]; then
+    if ! grep -q "# Curb" .gitignore 2>/dev/null; then
+        cat >> .gitignore <<EOF
+
+# Curb
+*.curb.tmp
+EOF
+        log_success "Updated .gitignore"
+    fi
+else
+    cat > .gitignore <<EOF
+# Curb
+*.curb.tmp
+EOF
+    log_success "Created .gitignore"
+fi
+
+echo ""
+log_success "Curb initialized!"
+echo ""
+echo "Next steps:"
+echo "  1. Edit prd.json to add your tasks (use ChatPRD template output)"
+echo "  2. Add specifications to specs/"
+echo "  3. Update AGENT.md with build instructions"
+echo "  4. Run 'curb --status' to see task summary"
+echo "  5. Run 'curb' to start the autonomous loop"
+echo ""
+echo "Useful commands:"
+echo "  curb --status   Show task progress"
+echo "  curb --ready    Show ready tasks"
+echo "  curb --once     Run single iteration"
+echo "  curb --plan     Run planning mode"
+echo ""
