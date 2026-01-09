@@ -1,0 +1,351 @@
+#!/usr/bin/env bats
+#
+# tests/tasks.bats - Tests for lib/tasks.sh
+#
+
+load 'test_helper'
+
+setup() {
+    setup_test_dir
+
+    # Force JSON backend (no beads in tests)
+    export CURB_BACKEND="json"
+
+    # Source the library under test
+    source "$LIB_DIR/tasks.sh"
+}
+
+teardown() {
+    teardown_test_dir
+}
+
+# =============================================================================
+# Backend Detection Tests
+# =============================================================================
+
+@test "detect_backend returns json when prd.json exists" {
+    create_minimal_prd
+    run detect_backend
+    [ "$status" -eq 0 ]
+    [ "$output" = "json" ]
+}
+
+@test "detect_backend defaults to json when no backend exists" {
+    run detect_backend
+    [ "$status" -eq 0 ]
+    [ "$output" = "json" ]
+}
+
+@test "detect_backend respects CURB_BACKEND=json" {
+    export CURB_BACKEND="json"
+    run detect_backend
+    [ "$status" -eq 0 ]
+    [ "$output" = "json" ]
+}
+
+# =============================================================================
+# PRD Validation Tests
+# =============================================================================
+
+@test "validate_prd succeeds with valid prd.json" {
+    use_fixture "valid_prd.json" "prd.json"
+    run validate_prd "prd.json"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK"* ]]
+}
+
+@test "validate_prd fails when tasks array is missing" {
+    use_fixture "missing_tasks.json" "prd.json"
+    run validate_prd "prd.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"missing 'tasks' array"* ]]
+}
+
+@test "validate_prd fails when tasks have missing required fields" {
+    use_fixture "missing_fields.json" "prd.json"
+    run validate_prd "prd.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"missing required fields"* ]]
+}
+
+@test "validate_prd fails when duplicate task IDs exist" {
+    use_fixture "duplicate_ids.json" "prd.json"
+    run validate_prd "prd.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Duplicate task IDs"* ]]
+}
+
+@test "validate_prd fails when dependency references invalid task" {
+    use_fixture "bad_dependency.json" "prd.json"
+    run validate_prd "prd.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Invalid dependency"* ]]
+}
+
+# =============================================================================
+# Get Ready Tasks Tests
+# =============================================================================
+
+@test "json_get_ready_tasks returns open tasks without dependencies" {
+    create_sample_prd
+    run json_get_ready_tasks "prd.json"
+    [ "$status" -eq 0 ]
+
+    # Should return test-0001 (open, no deps) and test-0003 (open, dep satisfied)
+    echo "$output" | jq -e 'length == 2'
+}
+
+@test "json_get_ready_tasks excludes tasks with unsatisfied dependencies" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "test",
+  "tasks": [
+    {"id": "t1", "title": "Blocker", "status": "open", "priority": "P1"},
+    {"id": "t2", "title": "Blocked", "status": "open", "priority": "P0", "dependsOn": ["t1"]}
+  ]
+}
+EOF
+    run json_get_ready_tasks "prd.json"
+    [ "$status" -eq 0 ]
+
+    # Only t1 should be returned (t2 is blocked)
+    local count
+    count=$(echo "$output" | jq 'length')
+    [ "$count" -eq 1 ]
+
+    # Verify it's t1
+    local returned_id
+    returned_id=$(echo "$output" | jq -r '.[0].id')
+    [ "$returned_id" = "t1" ]
+}
+
+@test "json_get_ready_tasks returns tasks sorted by priority" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "test",
+  "tasks": [
+    {"id": "t1", "title": "Low priority", "status": "open", "priority": "P3"},
+    {"id": "t2", "title": "High priority", "status": "open", "priority": "P0"},
+    {"id": "t3", "title": "Medium priority", "status": "open", "priority": "P1"}
+  ]
+}
+EOF
+    run json_get_ready_tasks "prd.json"
+    [ "$status" -eq 0 ]
+
+    # First task should be P0 (t2)
+    local first_id
+    first_id=$(echo "$output" | jq -r '.[0].id')
+    [ "$first_id" = "t2" ]
+}
+
+@test "json_get_ready_tasks returns empty array when all tasks closed" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "test",
+  "tasks": [
+    {"id": "t1", "title": "Done", "status": "closed", "priority": "P1"}
+  ]
+}
+EOF
+    run json_get_ready_tasks "prd.json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "[]" ]
+}
+
+# =============================================================================
+# Get Task Tests
+# =============================================================================
+
+@test "json_get_task returns task by ID" {
+    create_sample_prd
+    run json_get_task "prd.json" "test-0001"
+    [ "$status" -eq 0 ]
+
+    local title
+    title=$(echo "$output" | jq -r '.title')
+    [ "$title" = "First task" ]
+}
+
+@test "json_get_task returns empty for non-existent ID" {
+    create_sample_prd
+    run json_get_task "prd.json" "nonexistent"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# =============================================================================
+# Update Task Status Tests
+# =============================================================================
+
+@test "json_update_task_status changes task status" {
+    create_sample_prd
+    json_update_task_status "prd.json" "test-0001" "in_progress"
+
+    local status
+    status=$(jq -r '.tasks[] | select(.id == "test-0001") | .status' prd.json)
+    [ "$status" = "in_progress" ]
+}
+
+@test "json_update_task_status does not affect other tasks" {
+    create_sample_prd
+    local before
+    before=$(jq -r '.tasks[] | select(.id == "test-0002") | .status' prd.json)
+
+    json_update_task_status "prd.json" "test-0001" "in_progress"
+
+    local after
+    after=$(jq -r '.tasks[] | select(.id == "test-0002") | .status' prd.json)
+    [ "$before" = "$after" ]
+}
+
+# =============================================================================
+# Add Task Note Tests
+# =============================================================================
+
+@test "json_add_task_note adds timestamped note" {
+    create_sample_prd
+    json_add_task_note "prd.json" "test-0001" "Test note content"
+
+    local notes
+    notes=$(jq -r '.tasks[] | select(.id == "test-0001") | .notes' prd.json)
+
+    # Should contain the note text
+    [[ "$notes" == *"Test note content"* ]]
+
+    # Should contain a timestamp
+    [[ "$notes" == *"202"* ]]  # Year prefix
+}
+
+# =============================================================================
+# Create Task Tests
+# =============================================================================
+
+@test "json_create_task adds new task to prd.json" {
+    create_minimal_prd
+    local new_task='{"id": "test-new", "title": "New task", "status": "open", "priority": "P1"}'
+
+    json_create_task "prd.json" "$new_task"
+
+    local count
+    count=$(jq '.tasks | length' prd.json)
+    [ "$count" -eq 1 ]
+
+    local title
+    title=$(jq -r '.tasks[0].title' prd.json)
+    [ "$title" = "New task" ]
+}
+
+# =============================================================================
+# Task Counts Tests
+# =============================================================================
+
+@test "json_get_task_counts returns correct counts" {
+    create_sample_prd
+    run json_get_task_counts "prd.json"
+    [ "$status" -eq 0 ]
+
+    local total open closed
+    total=$(echo "$output" | jq '.total')
+    open=$(echo "$output" | jq '.open')
+    closed=$(echo "$output" | jq '.closed')
+
+    [ "$total" -eq 3 ]
+    [ "$open" -eq 2 ]
+    [ "$closed" -eq 1 ]
+}
+
+# =============================================================================
+# All Tasks Complete Tests
+# =============================================================================
+
+@test "json_all_tasks_complete returns false when open tasks exist" {
+    create_sample_prd
+    run json_all_tasks_complete "prd.json"
+    [ "$status" -ne 0 ]
+}
+
+@test "json_all_tasks_complete returns true when all tasks closed" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "test",
+  "tasks": [
+    {"id": "t1", "title": "Done", "status": "closed", "priority": "P1"},
+    {"id": "t2", "title": "Also done", "status": "closed", "priority": "P2"}
+  ]
+}
+EOF
+    run json_all_tasks_complete "prd.json"
+    [ "$status" -eq 0 ]
+}
+
+# =============================================================================
+# Blocked Tasks Tests
+# =============================================================================
+
+@test "json_get_blocked_tasks returns tasks with unsatisfied dependencies" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "test",
+  "tasks": [
+    {"id": "t1", "title": "Blocker", "status": "open", "priority": "P1"},
+    {"id": "t2", "title": "Blocked", "status": "open", "priority": "P0", "dependsOn": ["t1"]}
+  ]
+}
+EOF
+    run json_get_blocked_tasks "prd.json"
+    [ "$status" -eq 0 ]
+
+    # t2 should be blocked
+    local count
+    count=$(echo "$output" | jq 'length')
+    [ "$count" -eq 1 ]
+
+    local blocked_id
+    blocked_id=$(echo "$output" | jq -r '.[0].id')
+    [ "$blocked_id" = "t2" ]
+}
+
+@test "json_get_blocked_tasks returns empty when no blocked tasks" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "test",
+  "tasks": [
+    {"id": "t1", "title": "Done", "status": "closed", "priority": "P1"},
+    {"id": "t2", "title": "Ready", "status": "open", "priority": "P0", "dependsOn": ["t1"]}
+  ]
+}
+EOF
+    run json_get_blocked_tasks "prd.json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "[]" ]
+}
+
+# =============================================================================
+# Generate Task ID Tests
+# =============================================================================
+
+@test "generate_task_id creates ID with prefix from prd.json" {
+    cat > prd.json << 'EOF'
+{
+  "prefix": "myprj",
+  "tasks": []
+}
+EOF
+    run generate_task_id "prd.json"
+    [ "$status" -eq 0 ]
+
+    # Should start with the prefix
+    [[ "$output" == myprj-* ]]
+}
+
+@test "generate_task_id creates unique IDs" {
+    create_minimal_prd
+
+    local id1 id2
+    id1=$(generate_task_id "prd.json")
+    id2=$(generate_task_id "prd.json")
+
+    # IDs should be different
+    [ "$id1" != "$id2" ]
+}

@@ -1,0 +1,15 @@
+{
+  "prefix": "dup",
+  "tasks": [
+    {
+      "id": "dup-0001",
+      "title": "First task",
+      "status": "open"
+    },
+    {
+      "id": "dup-0001",
+      "title": "Duplicate ID task",
+      "status": "open"
+    }
+  ]
+}
