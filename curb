@@ -20,8 +20,8 @@ PROJECT_DIR="${CURB_PROJECT_DIR:-$(pwd)}"
 
 # Source task management library
 source "${CURB_DIR}/lib/tasks.sh"
-# Source LLM abstraction layer
-source "${CURB_DIR}/lib/llm.sh"
+# Source harness abstraction layer
+source "${CURB_DIR}/lib/harness.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,9 +39,9 @@ STREAM="${CURB_STREAM:-false}"
 # Backend mode (set via --backend flag or CURB_BACKEND env)
 # Values: "auto", "beads", "json"
 BACKEND="${CURB_BACKEND:-auto}"
-# LLM backend (set via --llm flag or LLM_BACKEND env)
+# Harness (set via --harness flag or HARNESS env)
 # Values: "auto", "claude", "codex"
-LLM_BACKEND="${LLM_BACKEND:-auto}"
+HARNESS="${HARNESS:-auto}"
 
 log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
@@ -58,9 +58,9 @@ check_deps() {
     local missing=()
     command -v jq >/dev/null 2>&1 || missing+=("jq")
 
-    # Check for at least one LLM CLI
-    if ! llm_available; then
-        missing+=("LLM CLI (claude or codex)")
+    # Check for at least one harness
+    if ! harness_available; then
+        missing+=("harness (claude or codex)")
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -68,8 +68,8 @@ check_deps() {
         exit 1
     fi
 
-    # Log which LLM backend is active
-    log_debug "LLM backend: $(llm_get_backend)"
+    # Log which harness is active
+    log_debug "Harness: $(harness_get)"
 }
 
 # Validate project structure
@@ -282,19 +282,19 @@ run_iteration() {
         echo ""
     fi
 
-    local llm_backend=$(llm_get_backend)
-    log_info "Running ${llm_backend}..."
+    local harness=$(harness_get)
+    log_info "Running ${harness}..."
     echo ""
 
     if [[ "$DEBUG" == "true" ]]; then
         # Pre-flight check
-        log_debug "Pre-flight: ${llm_backend} version"
+        log_debug "Pre-flight: ${harness} version"
         local version_output
-        version_output=$(llm_version 2>&1) && log_debug "Version: ${version_output}" || log_debug "WARNING: version check failed"
-        log_debug "Binary: $(which ${llm_backend})"
+        version_output=$(harness_version 2>&1) && log_debug "Version: ${version_output}" || log_debug "WARNING: version check failed"
+        log_debug "Binary: $(which ${harness})"
     fi
 
-    # Run LLM with the prompt via abstraction layer
+    # Run harness with the prompt via abstraction layer
     local start_time=$(date +%s)
     local exit_code=0
     log_debug "Execution start: $(date)"
@@ -309,21 +309,21 @@ run_iteration() {
         log_debug "Task prompt: ${tmp_task}"
         log_debug ">>> Prompts saved for debugging"
         log_debug ""
-        log_debug "--- LLM START (${llm_backend}) ---"
+        log_debug "--- HARNESS START (${harness}) ---"
     fi
 
-    # Invoke LLM via abstraction layer
+    # Invoke harness via abstraction layer
     if [[ "$STREAM" == "true" ]]; then
-        log_info "Streaming ${llm_backend} output..."
-        llm_invoke_streaming "$system_prompt" "$task_prompt" "$DEBUG"
+        log_info "Streaming ${harness} output..."
+        harness_invoke_streaming "$system_prompt" "$task_prompt" "$DEBUG"
         exit_code=$?
     else
-        llm_invoke "$system_prompt" "$task_prompt" "$DEBUG"
+        harness_invoke "$system_prompt" "$task_prompt" "$DEBUG"
         exit_code=$?
     fi
 
     if [[ "$DEBUG" == "true" ]]; then
-        log_debug "--- LLM END (${llm_backend}) ---"
+        log_debug "--- HARNESS END (${harness}) ---"
 
         # Cleanup on success, keep on failure
         if [[ $exit_code -eq 0 ]]; then
@@ -461,7 +461,7 @@ main() {
             log_debug "Date: $(date)"
         elif [[ "$arg" == "--stream" ]]; then
             STREAM="true"
-            log_info "Stream mode enabled - showing LLM activity"
+            log_info "Stream mode enabled - showing harness activity"
         elif [[ "$arg" == "--backend="* ]]; then
             BACKEND="${arg#--backend=}"
             export CURB_BACKEND="$BACKEND"
@@ -473,26 +473,26 @@ main() {
             BACKEND="$arg"
             export CURB_BACKEND="$BACKEND"
             _next_is_backend=false
-        elif [[ "$arg" == "--llm="* ]]; then
-            LLM_BACKEND="${arg#--llm=}"
-            export LLM_BACKEND
-        elif [[ "$arg" == "--llm" ]]; then
-            # Next arg is the LLM backend value - handle in next iteration
-            _next_is_llm=true
+        elif [[ "$arg" == "--harness="* ]]; then
+            HARNESS="${arg#--harness=}"
+            export HARNESS
+        elif [[ "$arg" == "--harness" ]]; then
+            # Next arg is the harness value - handle in next iteration
+            _next_is_harness=true
             continue
-        elif [[ "${_next_is_llm:-}" == "true" ]]; then
-            LLM_BACKEND="$arg"
-            export LLM_BACKEND
-            _next_is_llm=false
+        elif [[ "${_next_is_harness:-}" == "true" ]]; then
+            HARNESS="$arg"
+            export HARNESS
+            _next_is_harness=false
         else
             args+=("$arg")
         fi
     done
     unset _next_is_backend
-    unset _next_is_llm
+    unset _next_is_harness
 
     check_deps
-    log_debug "Dependencies checked: jq and LLM CLI found"
+    log_debug "Dependencies checked: jq and harness found"
 
     case "${args[0]:-}" in
         --status|-s)
@@ -590,8 +590,8 @@ Say 'curb test successful' and nothing else."
             cat <<EOF
 curb - Claude Under Ralph + Beads
 
-Autonomous AI coding agent harness that drives LLM coding assistants (Claude Code
-or OpenAI Codex) in a loop.
+Autonomous AI coding agent that drives coding harnesses (Claude Code or OpenAI
+Codex) in a loop.
 
 Usage:
   curb              Run loop until all tasks complete
@@ -599,22 +599,22 @@ Usage:
   curb --status     Show current task status
   curb --ready      Show ready tasks
   curb --plan       Run in planning mode
-  curb --test       Test LLM invocation with simple prompts
+  curb --test       Test harness invocation with simple prompts
   curb --dump-prompt  Dump the actual prompt to a file for inspection
   curb --migrate-to-beads      Migrate tasks from prd.json to beads
   curb --migrate-to-beads-dry-run  Preview migration without making changes
   curb --debug      Enable debug logging (can combine with other flags)
-  curb --stream     Stream LLM activity in real-time (can combine)
+  curb --stream     Stream harness activity in real-time (can combine)
   curb --backend X  Force task backend: "beads" or "json" (default: auto-detect)
-  curb --llm X      Force LLM backend: "claude" or "codex" (default: auto-detect)
+  curb --harness X  Force harness: "claude" or "codex" (default: auto-detect)
 
 Flags:
   --debug, -d       Enable verbose debug output including:
-                    - Full prompt being sent to LLM
+                    - Full prompt being sent to harness
                     - Task selection details and JSON
                     - Timing information
                     - Saves prompt to temp file for debugging
-  --stream          Stream LLM activity showing:
+  --stream          Stream harness activity showing:
                     - Tool calls as they happen
                     - Text responses in real-time
                     - Final result and cost
@@ -622,7 +622,7 @@ Flags:
                     - auto: use beads if available, else json (default)
                     - beads: use beads CLI (bd) for task management
                     - json: use prd.json file directly
-  --llm <backend>   LLM backend selection:
+  --harness <name>  Harness selection:
                     - auto: prefer claude, fall back to codex (default)
                     - claude: use Claude Code CLI
                     - codex: use OpenAI Codex CLI
@@ -632,7 +632,7 @@ Environment:
   CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
   CURB_DEBUG           Enable debug mode (set to "true")
   CURB_BACKEND         Task backend: "auto", "beads", or "json"
-  LLM_BACKEND          LLM backend: "auto", "claude", or "codex"
+  HARNESS              Harness: "auto", "claude", or "codex"
   CLAUDE_FLAGS         Extra flags for Claude Code CLI
   CODEX_FLAGS          Extra flags for OpenAI Codex CLI
 

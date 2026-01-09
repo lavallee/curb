@@ -1,67 +1,67 @@
 #!/usr/bin/env bash
 #
-# llm.sh - LLM Backend Abstraction Layer
+# harness.sh - AI Coding Harness Abstraction Layer
 #
-# Provides a unified interface for different LLM CLI tools (Claude Code, Codex).
+# Provides a unified interface for different AI coding harnesses (Claude Code, Codex).
 # Follows the same pattern as tasks.sh for backend abstraction.
 #
 
-# Cache for detected backend
-_LLM_BACKEND=""
+# Cache for detected harness
+_HARNESS=""
 
 # ============================================================================
-# Backend Detection
+# Harness Detection
 # ============================================================================
 
-# Detect available LLM backend
-# Priority: explicit LLM_BACKEND setting > claude > codex
-llm_detect() {
+# Detect available harness
+# Priority: explicit HARNESS setting > claude > codex
+harness_detect() {
     # If explicitly set, use that
-    if [[ -n "${LLM_BACKEND:-}" && "$LLM_BACKEND" != "auto" ]]; then
-        _LLM_BACKEND="$LLM_BACKEND"
-        echo "$_LLM_BACKEND"
+    if [[ -n "${HARNESS:-}" && "$HARNESS" != "auto" ]]; then
+        _HARNESS="$HARNESS"
+        echo "$_HARNESS"
         return 0
     fi
 
     # Auto-detect: prefer claude, fallback to codex
     if command -v claude >/dev/null 2>&1; then
-        _LLM_BACKEND="claude"
+        _HARNESS="claude"
     elif command -v codex >/dev/null 2>&1; then
-        _LLM_BACKEND="codex"
+        _HARNESS="codex"
     else
-        _LLM_BACKEND=""
+        _HARNESS=""
     fi
 
-    echo "$_LLM_BACKEND"
+    echo "$_HARNESS"
 }
 
-# Get current backend (cached)
-llm_get_backend() {
-    if [[ -z "$_LLM_BACKEND" ]]; then
-        llm_detect >/dev/null
+# Get current harness (cached)
+harness_get() {
+    if [[ -z "$_HARNESS" ]]; then
+        harness_detect >/dev/null
     fi
-    echo "$_LLM_BACKEND"
+    echo "$_HARNESS"
 }
 
-# Check if any LLM CLI is available
-# Optional: pass backend name to check specific one
-llm_available() {
-    local backend="${1:-}"
+# Check if any harness is available
+# Optional: pass harness name to check specific one
+harness_available() {
+    local harness="${1:-}"
 
-    if [[ -n "$backend" ]]; then
-        command -v "$backend" >/dev/null 2>&1
+    if [[ -n "$harness" ]]; then
+        command -v "$harness" >/dev/null 2>&1
         return $?
     fi
 
-    # Check if any backend is available
+    # Check if any harness is available
     command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1
 }
 
-# Get version of current backend
-llm_version() {
-    local backend=$(llm_get_backend)
+# Get version of current harness
+harness_version() {
+    local harness=$(harness_get)
 
-    case "$backend" in
+    case "$harness" in
         claude)
             claude --version 2>&1 || echo "unknown"
             ;;
@@ -69,7 +69,7 @@ llm_version() {
             codex --version 2>&1 || echo "unknown"
             ;;
         *)
-            echo "no backend"
+            echo "no harness"
             ;;
     esac
 }
@@ -78,16 +78,16 @@ llm_version() {
 # Unified Interface
 # ============================================================================
 
-# Main invocation - delegates to backend
-# Usage: llm_invoke system_prompt task_prompt [debug]
-llm_invoke() {
+# Main invocation - delegates to harness
+# Usage: harness_invoke system_prompt task_prompt [debug]
+harness_invoke() {
     local system_prompt="$1"
     local task_prompt="$2"
     local debug="${3:-false}"
 
-    local backend=$(llm_get_backend)
+    local harness=$(harness_get)
 
-    case "$backend" in
+    case "$harness" in
         claude)
             claude_invoke "$system_prompt" "$task_prompt" "$debug"
             ;;
@@ -95,22 +95,22 @@ llm_invoke() {
             codex_invoke "$system_prompt" "$task_prompt" "$debug"
             ;;
         *)
-            echo "Error: No LLM backend available" >&2
+            echo "Error: No harness available" >&2
             return 1
             ;;
     esac
 }
 
 # Streaming invocation with output parsing
-# Usage: llm_invoke_streaming system_prompt task_prompt [debug]
-llm_invoke_streaming() {
+# Usage: harness_invoke_streaming system_prompt task_prompt [debug]
+harness_invoke_streaming() {
     local system_prompt="$1"
     local task_prompt="$2"
     local debug="${3:-false}"
 
-    local backend=$(llm_get_backend)
+    local harness=$(harness_get)
 
-    case "$backend" in
+    case "$harness" in
         claude)
             claude_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
             ;;
@@ -118,7 +118,7 @@ llm_invoke_streaming() {
             codex_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
             ;;
         *)
-            echo "Error: No LLM backend available" >&2
+            echo "Error: No harness available" >&2
             return 1
             ;;
     esac
