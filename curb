@@ -34,6 +34,9 @@ NC='\033[0m' # No Color
 DEBUG="${CURB_DEBUG:-false}"
 # Stream mode (set via --stream flag)
 STREAM="${CURB_STREAM:-false}"
+# Backend mode (set via --backend flag or CURB_BACKEND env)
+# Values: "auto", "beads", "json"
+BACKEND="${CURB_BACKEND:-auto}"
 
 log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
@@ -106,12 +109,23 @@ check_deps() {
 validate_project() {
     log_debug "Validating project structure in ${PROJECT_DIR}"
 
-    if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
-        log_error "No prd.json found in ${PROJECT_DIR}"
-        log_info "Run 'curb-init' to scaffold a new project"
-        exit 1
+    # Detect task backend
+    local detected_backend
+    detected_backend=$(detect_backend "${PROJECT_DIR}")
+    log_debug "Task backend: ${detected_backend}"
+
+    if [[ "$detected_backend" == "beads" ]]; then
+        log_info "Using beads backend"
+        # Beads doesn't need prd.json
+    else
+        log_info "Using JSON backend (prd.json)"
+        if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
+            log_error "No prd.json found in ${PROJECT_DIR}"
+            log_info "Run 'curb-init' to scaffold a new project"
+            exit 1
+        fi
+        log_debug "Found prd.json ($(wc -c < "${PROJECT_DIR}/prd.json") bytes)"
     fi
-    log_debug "Found prd.json ($(wc -c < "${PROJECT_DIR}/prd.json") bytes)"
 
     if [[ ! -f "${PROJECT_DIR}/PROMPT.md" ]]; then
         log_warn "No PROMPT.md found, using default template"
@@ -492,10 +506,22 @@ main() {
         elif [[ "$arg" == "--stream" ]]; then
             STREAM="true"
             log_info "Stream mode enabled - showing Claude's activity"
+        elif [[ "$arg" == "--backend="* ]]; then
+            BACKEND="${arg#--backend=}"
+            export CURB_BACKEND="$BACKEND"
+        elif [[ "$arg" == "--backend" ]]; then
+            # Next arg is the backend value - handle in next iteration
+            _next_is_backend=true
+            continue
+        elif [[ "${_next_is_backend:-}" == "true" ]]; then
+            BACKEND="$arg"
+            export CURB_BACKEND="$BACKEND"
+            _next_is_backend=false
         else
             args+=("$arg")
         fi
     done
+    unset _next_is_backend
 
     check_deps
     log_debug "Dependencies checked: jq and claude found"
@@ -551,6 +577,24 @@ Say 'curb test successful' and nothing else."
             echo ""
             log_success "All tests complete"
             ;;
+        --migrate-to-beads)
+            if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
+                log_error "No prd.json found to migrate"
+                exit 1
+            fi
+            log_info "Migrating from prd.json to beads..."
+            echo ""
+            migrate_json_to_beads "${PROJECT_DIR}/prd.json" "false"
+            ;;
+        --migrate-to-beads-dry-run)
+            if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
+                log_error "No prd.json found to migrate"
+                exit 1
+            fi
+            log_info "DRY RUN: Showing what would be migrated..."
+            echo ""
+            migrate_json_to_beads "${PROJECT_DIR}/prd.json" "true"
+            ;;
         --dump-prompt)
             validate_project
             local prd="${PROJECT_DIR}/prd.json"
@@ -588,31 +632,45 @@ Usage:
   curb --plan       Run in planning mode
   curb --test       Test Claude Code invocation with simple prompts
   curb --dump-prompt  Dump the actual prompt to a file for inspection
+  curb --migrate-to-beads      Migrate tasks from prd.json to beads
+  curb --migrate-to-beads-dry-run  Preview migration without making changes
   curb --debug      Enable debug logging (can combine with other flags)
   curb --stream     Stream Claude's activity in real-time (can combine)
+  curb --backend X  Force backend: "beads" or "json" (default: auto-detect)
 
 Flags:
-  --debug, -d     Enable verbose debug output including:
-                  - Full prompt being sent to Claude Code
-                  - Task selection details and JSON
-                  - Timing information
-                  - Saves prompt to temp file for manual testing
-  --stream        Stream Claude's activity showing:
-                  - Tool calls as they happen
-                  - Text responses in real-time
-                  - Final result and cost
+  --debug, -d       Enable verbose debug output including:
+                    - Full prompt being sent to Claude Code
+                    - Task selection details and JSON
+                    - Timing information
+                    - Saves prompt to temp file for manual testing
+  --stream          Stream Claude's activity showing:
+                    - Tool calls as they happen
+                    - Text responses in real-time
+                    - Final result and cost
+  --backend <mode>  Task backend selection:
+                    - auto: use beads if available, else json (default)
+                    - beads: use beads CLI (bd) for task management
+                    - json: use prd.json file directly
 
 Environment:
   CURB_PROJECT_DIR     Project directory (default: pwd)
   CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
   CURB_DEBUG           Enable debug mode (set to "true")
+  CURB_BACKEND         Task backend: "auto", "beads", or "json"
 
 Files expected in project:
-  prd.json       Task backlog (beads-style format)
+  .beads/        Beads data directory (if using beads backend)
+  prd.json       Task backlog JSON (if using json backend)
   PROMPT.md      Loop prompt template
   AGENT.md       Agent build instructions
   specs/         Specification files
   progress.txt   Progress log (created automatically)
+
+Beads installation (optional, for beads backend):
+  brew install steveyegge/beads/bd
+  npm install -g @beads/bd
+  go install github.com/steveyegge/beads/cmd/bd@latest
 EOF
             ;;
         *)
