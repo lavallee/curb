@@ -112,6 +112,12 @@ validate_project() {
 show_status() {
     local prd="${PROJECT_DIR}/prd.json"
 
+    # Validate JSON before processing
+    if ! jq empty "$prd" 2>/dev/null; then
+        log_error "Invalid JSON in prd.json"
+        return 1
+    fi
+
     echo ""
     log_info "Task Status Summary"
     echo "===================="
@@ -152,6 +158,12 @@ show_status() {
 # Show ready tasks
 show_ready() {
     local prd="${PROJECT_DIR}/prd.json"
+
+    # Validate JSON before processing
+    if ! jq empty "$prd" 2>/dev/null; then
+        log_error "Invalid JSON in prd.json"
+        return 1
+    fi
 
     log_info "Ready Tasks (unblocked, status=open)"
     echo "======================================"
