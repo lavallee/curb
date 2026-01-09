@@ -11,6 +11,7 @@
 #   curb --status     # Show current task status
 #   curb --ready      # Show ready tasks
 #   curb --plan       # Run in planning mode (generate fix_plan.md)
+#   curb --debug      # Enable debug logging (can combine with other flags)
 #
 set -euo pipefail
 
@@ -25,12 +26,69 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
+
+# Debug mode (set via --debug flag)
+DEBUG="${CURB_DEBUG:-false}"
+# Stream mode (set via --stream flag)
+STREAM="${CURB_STREAM:-false}"
 
 log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[curb]${NC} $1"; }
 log_error() { echo -e "${RED}[curb]${NC} $1" >&2; }
+log_debug() {
+    if [[ "$DEBUG" == "true" ]]; then
+        echo -e "${DIM}${CYAN}[debug]${NC}${DIM} $1${NC}" >&2
+    fi
+}
+
+# Parse stream-json output into human-readable format
+parse_stream() {
+    while IFS= read -r line; do
+        # Skip empty lines
+        [[ -z "$line" ]] && continue
+
+        # Parse JSON and extract relevant info
+        local msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+
+        case "$msg_type" in
+            "assistant")
+                # Assistant text response
+                local content=$(echo "$line" | jq -r '.message.content[]? | select(.type=="text") | .text // empty' 2>/dev/null)
+                [[ -n "$content" ]] && echo -e "${content}"
+                ;;
+            "content_block_start")
+                local block_type=$(echo "$line" | jq -r '.content_block.type // empty' 2>/dev/null)
+                if [[ "$block_type" == "tool_use" ]]; then
+                    local tool_name=$(echo "$line" | jq -r '.content_block.name // empty' 2>/dev/null)
+                    echo -e "${YELLOW}▶ Tool: ${tool_name}${NC}"
+                fi
+                ;;
+            "content_block_delta")
+                local delta_type=$(echo "$line" | jq -r '.delta.type // empty' 2>/dev/null)
+                if [[ "$delta_type" == "text_delta" ]]; then
+                    local text=$(echo "$line" | jq -r '.delta.text // empty' 2>/dev/null)
+                    printf "%s" "$text"
+                elif [[ "$delta_type" == "input_json_delta" ]]; then
+                    : # Skip JSON input deltas (tool arguments building up)
+                fi
+                ;;
+            "result")
+                local result=$(echo "$line" | jq -r '.result // empty' 2>/dev/null)
+                [[ -n "$result" ]] && echo -e "\n${GREEN}✓ Result: ${result:0:200}${NC}"
+                local cost=$(echo "$line" | jq -r '.cost_usd // empty' 2>/dev/null)
+                [[ -n "$cost" && "$cost" != "null" ]] && echo -e "${DIM}  Cost: \$${cost}${NC}"
+                ;;
+            "system")
+                local sys_msg=$(echo "$line" | jq -r '.message // empty' 2>/dev/null)
+                [[ -n "$sys_msg" ]] && echo -e "${DIM}[system] ${sys_msg}${NC}"
+                ;;
+        esac
+    done
+}
 
 # Check dependencies
 check_deps() {
@@ -46,21 +104,27 @@ check_deps() {
 
 # Validate project structure
 validate_project() {
+    log_debug "Validating project structure in ${PROJECT_DIR}"
+
     if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
         log_error "No prd.json found in ${PROJECT_DIR}"
         log_info "Run 'curb-init' to scaffold a new project"
         exit 1
     fi
+    log_debug "Found prd.json ($(wc -c < "${PROJECT_DIR}/prd.json") bytes)"
 
     if [[ ! -f "${PROJECT_DIR}/PROMPT.md" ]]; then
         log_warn "No PROMPT.md found, using default template"
         cp "${CURB_DIR}/templates/PROMPT.md" "${PROJECT_DIR}/PROMPT.md"
     fi
+    log_debug "Found PROMPT.md ($(wc -l < "${PROJECT_DIR}/PROMPT.md") lines)"
 
     if [[ ! -f "${PROJECT_DIR}/AGENT.md" ]]; then
         log_warn "No AGENT.md found, using default template"
         cp "${CURB_DIR}/templates/AGENT.md" "${PROJECT_DIR}/AGENT.md"
     fi
+    log_debug "Found AGENT.md ($(wc -l < "${PROJECT_DIR}/AGENT.md") lines)"
+    log_debug "Project validation complete"
 }
 
 # Show task status summary
@@ -121,14 +185,14 @@ show_ready() {
     echo "$ready" | jq -r '.[] | "[\(.priority)] \(.id): \(.title)"'
 }
 
-# Generate the dynamic prompt for current iteration
-generate_prompt() {
-    local prd="${PROJECT_DIR}/prd.json"
-    local task_json="$1"
+# Generate the system prompt (static instructions from PROMPT.md)
+generate_system_prompt() {
+    cat "${PROJECT_DIR}/PROMPT.md"
+}
 
-    # Read base prompt template
-    local base_prompt
-    base_prompt=$(cat "${PROJECT_DIR}/PROMPT.md")
+# Generate the task prompt (just the current task details - kept short for stdin)
+generate_task_prompt() {
+    local task_json="$1"
 
     # Extract task details
     local task_id=$(echo "$task_json" | jq -r '.id')
@@ -137,54 +201,54 @@ generate_prompt() {
     local task_desc=$(echo "$task_json" | jq -r '.description')
     local task_criteria=$(echo "$task_json" | jq -r '.acceptanceCriteria // [] | join("\n- ")')
 
-    # Generate focused prompt
+    # Generate focused task prompt (minimal - just the task)
     cat <<EOF
-${base_prompt}
-
----
 ## CURRENT TASK
 
-**Task ID**: ${task_id}
-**Type**: ${task_type}
-**Title**: ${task_title}
+Task ID: ${task_id}
+Type: ${task_type}
+Title: ${task_title}
 
-**Description**:
+Description:
 ${task_desc}
 
-**Acceptance Criteria**:
+Acceptance Criteria:
 - ${task_criteria}
 
----
-
-Focus on THIS TASK ONLY. When complete:
-1. Run all feedback loops (typecheck, test, lint)
-2. If passing, update prd.json: set status to "closed" for ${task_id}
-3. Commit with message: ${task_type}(${task_id}): ${task_title}
+When complete:
+1. Run feedback loops (typecheck, test, lint)
+2. Update prd.json: set status to "closed" for ${task_id}
+3. Commit: ${task_type}(${task_id}): ${task_title}
 4. Append learnings to progress.txt
-
-If ALL tasks in prd.json have status="closed", output: <promise>COMPLETE</promise>
 EOF
 }
 
 # Run a single iteration
 run_iteration() {
     local prd="${PROJECT_DIR}/prd.json"
+    log_debug "Starting iteration, reading prd.json"
 
     # Check for in-progress tasks first (resume interrupted work)
     local current_task
+    log_debug "Checking for in-progress tasks..."
     current_task=$(jq '[.tasks[] | select(.status == "in_progress")] | first' "$prd")
+    log_debug "In-progress query result: ${current_task:0:100}..."
 
     if [[ "$current_task" != "null" && -n "$current_task" ]]; then
         local task_id=$(echo "$current_task" | jq -r '.id')
         log_warn "Resuming in-progress task: ${task_id}"
+        log_debug "Task JSON: $current_task"
     else
         # Find next ready task
+        log_debug "No in-progress tasks, finding ready tasks..."
         local ready_tasks
         ready_tasks=$(get_ready_tasks "$prd")
+        log_debug "Ready tasks result: ${ready_tasks:0:200}..."
 
         if [[ -z "$ready_tasks" || "$ready_tasks" == "[]" ]]; then
             # Check if we're done
             local open_count=$(jq '[.tasks[] | select(.status != "closed")] | length' "$prd")
+            log_debug "Open task count: ${open_count}"
             if [[ "$open_count" -eq 0 ]]; then
                 log_success "All tasks complete!"
                 return 0
@@ -197,28 +261,114 @@ run_iteration() {
         # Pick highest priority ready task
         current_task=$(echo "$ready_tasks" | jq 'first')
         local task_id=$(echo "$current_task" | jq -r '.id')
+        local task_priority=$(echo "$current_task" | jq -r '.priority')
 
         log_info "Selected task: ${task_id}"
+        log_debug "Task priority: ${task_priority}"
+        log_debug "Task JSON: $current_task"
 
         # Mark as in_progress
+        log_debug "Updating task status to in_progress..."
         update_task_status "$prd" "$task_id" "in_progress"
+        log_debug "Task status updated"
     fi
 
-    # Generate and run prompt
-    local prompt
-    prompt=$(generate_prompt "$current_task")
+    # Generate prompts
+    log_debug "Generating prompts..."
+    local system_prompt
+    system_prompt=$(generate_system_prompt)
+    local task_prompt
+    task_prompt=$(generate_task_prompt "$current_task")
+
+    local sys_bytes=$(echo "$system_prompt" | wc -c)
+    local task_bytes=$(echo "$task_prompt" | wc -c)
+    log_debug "System prompt: ${sys_bytes} bytes (via --append-system-prompt)"
+    log_debug "Task prompt: ${task_bytes} bytes (via stdin)"
+
+    # Show prompts in debug mode
+    if [[ "$DEBUG" == "true" ]]; then
+        echo ""
+        log_debug "=== SYSTEM PROMPT ==="
+        echo -e "${DIM}$system_prompt${NC}" >&2
+        log_debug "=== TASK PROMPT ==="
+        echo -e "${DIM}$task_prompt${NC}" >&2
+        log_debug "===================="
+        echo ""
+    fi
 
     log_info "Running Claude Code..."
     echo ""
 
-    # Run claude code with the prompt
-    # Using --print to allow the agent to complete autonomously
-    echo "$prompt" | claude --print
+    if [[ "$DEBUG" == "true" ]]; then
+        # Pre-flight check
+        log_debug "Pre-flight: claude --version"
+        local version_output
+        version_output=$(claude --version 2>&1) && log_debug "Version: ${version_output}" || log_debug "WARNING: --version failed"
+        log_debug "Binary: $(which claude)"
+    fi
 
-    local exit_code=$?
+    # Run claude code with the prompt
+    # Using -p flag with --append-system-prompt to keep stdin small
+    local start_time=$(date +%s)
+    local exit_code=0
+    log_debug "Execution start: $(date)"
+
+    if [[ "$DEBUG" == "true" ]]; then
+        # Save prompts to temp files for manual testing
+        local tmp_sys=$(mktemp)
+        local tmp_task=$(mktemp)
+        echo "$system_prompt" > "$tmp_sys"
+        echo "$task_prompt" > "$tmp_task"
+        log_debug "System prompt: ${tmp_sys}"
+        log_debug "Task prompt: ${tmp_task}"
+        log_debug ">>> To manually test:"
+        log_debug ">>>   claude -p --append-system-prompt \"\$(cat ${tmp_sys})\" < ${tmp_task}"
+        log_debug ""
+        log_debug "--- CLAUDE START ---"
+    fi
+
+    # Use --append-system-prompt for the bulk, stdin just for task
+    # --dangerously-skip-permissions allows all tools without prompting
+    if [[ "$STREAM" == "true" ]]; then
+        log_info "Streaming Claude output..."
+        if [[ "$DEBUG" == "true" ]]; then
+            echo "$task_prompt" | claude -p --append-system-prompt "$system_prompt" --dangerously-skip-permissions --debug --verbose --output-format stream-json | parse_stream
+        else
+            echo "$task_prompt" | claude -p --append-system-prompt "$system_prompt" --dangerously-skip-permissions --verbose --output-format stream-json | parse_stream
+        fi
+    elif [[ "$DEBUG" == "true" ]]; then
+        log_debug "Running with --debug flag"
+        echo "$task_prompt" | claude -p --append-system-prompt "$system_prompt" --dangerously-skip-permissions --debug
+    else
+        echo "$task_prompt" | claude -p --append-system-prompt "$system_prompt" --dangerously-skip-permissions
+    fi
+    exit_code=$?
+
+    if [[ "$DEBUG" == "true" ]]; then
+        log_debug "--- CLAUDE END ---"
+
+        # Cleanup on success, keep on failure
+        if [[ $exit_code -eq 0 ]]; then
+            rm -f "$tmp_sys" "$tmp_task"
+        else
+            log_debug "Keeping prompt files for debugging"
+            log_debug "  System: ${tmp_sys}"
+            log_debug "  Task: ${tmp_task}"
+        fi
+    fi
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    log_debug "Execution end: $(date)"
+    log_debug "Duration: ${duration} seconds"
+    log_debug "Exit code: ${exit_code}"
 
     if [[ $exit_code -ne 0 ]]; then
         log_warn "Claude Code exited with code ${exit_code}"
+        log_debug "Non-zero exit may indicate: timeout, error, or user interrupt"
+    else
+        log_debug "Claude Code completed successfully"
     fi
 
     return $exit_code
@@ -227,6 +377,7 @@ run_iteration() {
 # Run planning mode
 run_planning() {
     local prd="${PROJECT_DIR}/prd.json"
+    log_debug "Starting planning mode"
 
     log_info "Running in planning mode..."
 
@@ -251,7 +402,21 @@ Think hard. Be thorough. Use many parallel subagents for research.
 EOF
 )
 
-    echo "$plan_prompt" | claude --print
+    if [[ "$DEBUG" == "true" ]]; then
+        log_debug "Plan prompt: $(echo "$plan_prompt" | wc -l) lines"
+        log_debug "=== PLAN PROMPT ==="
+        echo -e "${DIM}$plan_prompt${NC}" >&2
+        log_debug "==================="
+    fi
+
+    local start_time=$(date +%s)
+    log_debug "Execution start: $(date)"
+
+    echo "$plan_prompt" | claude -p --dangerously-skip-permissions
+
+    local exit_code=$?
+    local end_time=$(date +%s)
+    log_debug "Execution end: $(date), duration: $((end_time - start_time))s, exit: ${exit_code}"
 }
 
 # Main loop
@@ -260,15 +425,20 @@ run_loop() {
     local iteration=0
 
     log_info "Starting curb loop (max ${max_iterations} iterations)"
+    log_debug "Max iterations: ${max_iterations}"
+    log_debug "Loop starting at: $(date)"
     echo ""
 
     while [[ $iteration -lt $max_iterations ]]; do
         iteration=$((iteration + 1))
         log_info "=== Iteration ${iteration} ==="
+        log_debug "--- Iteration ${iteration} start: $(date) ---"
 
         # Check if all tasks complete
         local prd="${PROJECT_DIR}/prd.json"
+        log_debug "Querying remaining tasks..."
         local remaining=$(jq '[.tasks[] | select(.status != "closed")] | length' "$prd")
+        log_debug "Remaining tasks: ${remaining}"
 
         if [[ "$remaining" -eq 0 ]]; then
             log_success "All tasks complete! Exiting loop."
@@ -277,28 +447,52 @@ run_loop() {
         fi
 
         # Run single iteration
+        log_debug "Calling run_iteration..."
         if ! run_iteration; then
             log_warn "Iteration failed, continuing..."
+            log_debug "run_iteration returned non-zero"
         fi
 
         echo ""
         log_info "Iteration ${iteration} complete. ${remaining} tasks remaining."
+        log_debug "--- Iteration ${iteration} end: $(date) ---"
         echo ""
 
         # Brief pause between iterations to allow for interruption
+        log_debug "Sleeping 2 seconds before next iteration..."
         sleep 2
     done
 
     log_warn "Reached max iterations (${max_iterations})"
+    log_debug "Loop terminated at: $(date)"
     show_status
     return 1
 }
 
 # Main entry point
 main() {
-    check_deps
+    # Parse flags first (can be combined with other flags)
+    local args=()
+    for arg in "$@"; do
+        if [[ "$arg" == "--debug" || "$arg" == "-d" ]]; then
+            DEBUG="true"
+            log_debug "Debug mode enabled"
+            log_debug "CURB_DIR=${CURB_DIR}"
+            log_debug "PROJECT_DIR=${PROJECT_DIR}"
+            log_debug "Shell: $SHELL (bash ${BASH_VERSION})"
+            log_debug "Date: $(date)"
+        elif [[ "$arg" == "--stream" ]]; then
+            STREAM="true"
+            log_info "Stream mode enabled - showing Claude's activity"
+        else
+            args+=("$arg")
+        fi
+    done
 
-    case "${1:-}" in
+    check_deps
+    log_debug "Dependencies checked: jq and claude found"
+
+    case "${args[0]:-}" in
         --status|-s)
             validate_project
             show_status
@@ -315,6 +509,63 @@ main() {
             validate_project
             run_planning
             ;;
+        --test|-t)
+            log_info "Testing Claude Code invocation..."
+            log_debug "Binary: $(which claude)"
+            log_debug "Version: $(claude --version 2>&1)"
+            echo ""
+            log_info "Test 1: Simple echo pipe"
+            log_debug "Command: echo 'Say hello' | claude -p"
+            if echo "Say hello" | claude -p; then
+                log_success "Test 1 passed"
+            else
+                log_error "Test 1 failed (exit: $?)"
+            fi
+            echo ""
+            log_info "Test 2: Heredoc pipe"
+            log_debug "Command: claude -p <<< 'Say goodbye'"
+            if claude -p <<< "Say goodbye"; then
+                log_success "Test 2 passed"
+            else
+                log_error "Test 2 failed (exit: $?)"
+            fi
+            echo ""
+            log_info "Test 3: Multi-line prompt"
+            local test_prompt="You are a helpful assistant.
+
+Say 'curb test successful' and nothing else."
+            log_debug "Command: echo \"\$test_prompt\" | claude -p"
+            if echo "$test_prompt" | claude -p; then
+                log_success "Test 3 passed"
+            else
+                log_error "Test 3 failed (exit: $?)"
+            fi
+            echo ""
+            log_success "All tests complete"
+            ;;
+        --dump-prompt)
+            validate_project
+            local prd="${PROJECT_DIR}/prd.json"
+            local current_task
+            current_task=$(jq '[.tasks[] | select(.status == "in_progress")] | first' "$prd")
+            if [[ "$current_task" == "null" || -z "$current_task" ]]; then
+                current_task=$(get_ready_tasks "$prd" | jq 'first')
+            fi
+            if [[ "$current_task" == "null" || -z "$current_task" ]]; then
+                log_error "No tasks available"
+                exit 1
+            fi
+            local sys_file="${PROJECT_DIR}/curb_system_prompt.txt"
+            local task_file="${PROJECT_DIR}/curb_task_prompt.txt"
+            generate_system_prompt > "$sys_file"
+            generate_task_prompt "$current_task" > "$task_file"
+            log_success "Prompts dumped:"
+            log_info "  System: ${sys_file} ($(wc -c < "$sys_file") bytes)"
+            log_info "  Task:   ${task_file} ($(wc -c < "$task_file") bytes)"
+            log_info ""
+            log_info "To test manually:"
+            log_info "  claude -p --append-system-prompt \"\$(cat ${sys_file})\" < ${task_file}"
+            ;;
         --help|-h)
             cat <<EOF
 curb - Claude Under Ralph + Beads
@@ -327,10 +578,26 @@ Usage:
   curb --status     Show current task status
   curb --ready      Show ready tasks
   curb --plan       Run in planning mode
+  curb --test       Test Claude Code invocation with simple prompts
+  curb --dump-prompt  Dump the actual prompt to a file for inspection
+  curb --debug      Enable debug logging (can combine with other flags)
+  curb --stream     Stream Claude's activity in real-time (can combine)
+
+Flags:
+  --debug, -d     Enable verbose debug output including:
+                  - Full prompt being sent to Claude Code
+                  - Task selection details and JSON
+                  - Timing information
+                  - Saves prompt to temp file for manual testing
+  --stream        Stream Claude's activity showing:
+                  - Tool calls as they happen
+                  - Text responses in real-time
+                  - Final result and cost
 
 Environment:
   CURB_PROJECT_DIR     Project directory (default: pwd)
   CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
+  CURB_DEBUG           Enable debug mode (set to "true")
 
 Files expected in project:
   prd.json       Task backlog (beads-style format)
