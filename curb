@@ -236,7 +236,10 @@ run_iteration() {
 
     if [[ "$current_task" != "null" && -n "$current_task" ]]; then
         local task_id=$(echo "$current_task" | jq -r '.id')
+        local task_title=$(echo "$current_task" | jq -r '.title')
+        local task_type=$(echo "$current_task" | jq -r '.type')
         log_warn "Resuming in-progress task: ${task_id}"
+        log_info "  ${task_type}: ${task_title}"
         log_debug "Task JSON: $current_task"
     else
         # Find next ready task
@@ -261,10 +264,12 @@ run_iteration() {
         # Pick highest priority ready task
         current_task=$(echo "$ready_tasks" | jq 'first')
         local task_id=$(echo "$current_task" | jq -r '.id')
+        local task_title=$(echo "$current_task" | jq -r '.title')
+        local task_type=$(echo "$current_task" | jq -r '.type')
         local task_priority=$(echo "$current_task" | jq -r '.priority')
 
-        log_info "Selected task: ${task_id}"
-        log_debug "Task priority: ${task_priority}"
+        log_info "Selected task: ${task_id} [${task_priority}]"
+        log_info "  ${task_type}: ${task_title}"
         log_debug "Task JSON: $current_task"
 
         # Mark as in_progress
