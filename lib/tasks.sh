@@ -32,8 +32,8 @@ detect_backend() {
                 if ! beads_available; then
                     echo "WARNING: CURB_BACKEND=beads but beads (bd) not installed, falling back to json" >&2
                     _TASK_BACKEND="json"
-                elif ! beads_initialized; then
-                    echo "WARNING: CURB_BACKEND=beads but .beads/ not found. Run 'bd init' first, falling back to json" >&2
+                elif ! beads_initialized "$project_dir"; then
+                    echo "WARNING: CURB_BACKEND=beads but .beads/ not found in ${project_dir}. Run 'bd init' first, falling back to json" >&2
                     _TASK_BACKEND="json"
                 else
                     _TASK_BACKEND="beads"
@@ -53,7 +53,7 @@ detect_backend() {
 
     # Auto-detect if not explicitly set
     if [[ -z "$_TASK_BACKEND" ]]; then
-        if beads_available && beads_initialized; then
+        if beads_available && beads_initialized "$project_dir"; then
             _TASK_BACKEND="beads"
         elif [[ -f "${project_dir}/prd.json" ]]; then
             _TASK_BACKEND="json"

@@ -16,9 +16,11 @@ beads_available() {
     command -v bd >/dev/null 2>&1
 }
 
-# Check if beads is initialized in the current project
+# Check if beads is initialized in a project directory
+# Usage: beads_initialized [project_dir]
 beads_initialized() {
-    [[ -d ".beads" ]] || [[ -f ".beads/issues.jsonl" ]]
+    local project_dir="${1:-.}"
+    [[ -d "${project_dir}/.beads" ]] || [[ -f "${project_dir}/.beads/issues.jsonl" ]]
 }
 
 # Initialize beads in a project
