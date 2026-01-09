@@ -1,10 +1,11 @@
 # Curb
 
-**C**laude **U**nder **R**alph + **B**eads
+**C**oding **U**nder **R**alph + **B**eads
+
 
 An autonomous AI coding agent harness that drives AI coding CLIs in a loop to build software from a structured task backlog.
 
-Combines the [Ralph Wiggum technique](https://ghuntley.com/ralph/) (running an AI agent in a while loop) with [beads-style](https://github.com/steveyegge/beads) task numbering (hash IDs, P0-P4 priorities, dependency tracking).
+Combines the [Ralph Wiggum technique](https://ghuntley.com/ralph/) (running an AI agent in a while loop) with [beads-style](https://github.com/steveyegge/beads) task management (hash IDs, P0-P4 priorities, dependency tracking).
 
 ## Features
 
