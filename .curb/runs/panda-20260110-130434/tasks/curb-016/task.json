@@ -2,7 +2,9 @@
   "task_id": "curb-016",
   "title": "Implement cmd_artifacts to show task artifact paths",
   "priority": "P1",
-  "status": "in_progress",
+  "status": "failed",
   "started_at": "2026-01-10T19:05:23Z",
-  "iterations": 0
+  "iterations": 1,
+  "completed_at": "2026-01-10T19:10:25Z",
+  "exit_code": 1
 }

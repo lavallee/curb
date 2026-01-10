@@ -1,7 +1,7 @@
 {
-  "run_id": "panda-20260110-130434",
-  "session_name": "panda",
-  "started_at": "2026-01-10T18:04:34Z",
+  "run_id": "meerkat-20260110-141339",
+  "session_name": "meerkat",
+  "started_at": "2026-01-10T19:13:39Z",
   "status": "in_progress",
   "config": {
     "harness": {
@@ -25,7 +25,5 @@
     "hooks": {
       "enabled": true
     }
-  },
-  "tasks_failed": 9,
-  "tasks_completed": 1
+  }
 }
