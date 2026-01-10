@@ -145,3 +145,31 @@ create_sample_prd() {
 }
 EOF
 }
+
+# Cross-platform permission checking helper
+# Returns octal permissions (e.g., "700", "600")
+get_permissions() {
+    local path="$1"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        stat -f "%Lp" "$path"
+    else
+        stat -c "%a" "$path"
+    fi
+}
+
+# Check if file/dir has expected permissions
+# Usage: assert_permissions "/path/to/file" "600"
+assert_permissions() {
+    local path="$1"
+    local expected="$2"
+    local actual
+
+    actual=$(get_permissions "$path")
+    if [[ "$actual" != "$expected" ]]; then
+        echo "Permission assertion failed:"
+        echo "  Path: $path"
+        echo "  Expected: $expected"
+        echo "  Actual: $actual"
+        return 1
+    fi
+}

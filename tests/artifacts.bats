@@ -66,9 +66,7 @@ teardown() {
     task_dir=$(artifacts_get_task_dir "test-001")
 
     # Check directory permissions (should be 700)
-    local perms
-    perms=$(stat -f "%Lp" "$task_dir" 2>/dev/null || stat -c "%a" "$task_dir" 2>/dev/null)
-    [ "$perms" = "700" ]
+    assert_permissions "$task_dir" "700"
 }
 
 @test "artifacts_init_run: fails when session not initialized" {
@@ -328,9 +326,7 @@ teardown() {
     local plan_file="${task_dir}/plan.md"
 
     # Check permissions (should be 600)
-    local perms
-    perms=$(stat -f "%Lp" "$plan_file" 2>/dev/null || stat -c "%a" "$plan_file" 2>/dev/null)
-    [ "$perms" = "600" ]
+    assert_permissions "$plan_file" "600"
 }
 
 @test "artifacts_capture_plan: is idempotent (overwrites)" {
@@ -495,9 +491,7 @@ teardown() {
     local commands_file="${task_dir}/commands.jsonl"
 
     # Check permissions (should be 600)
-    local perms
-    perms=$(stat -f "%Lp" "$commands_file" 2>/dev/null || stat -c "%a" "$commands_file" 2>/dev/null)
-    [ "$perms" = "600" ]
+    assert_permissions "$commands_file" "600"
 }
 
 @test "artifacts_capture_diff: fails without task_id" {
@@ -595,9 +589,7 @@ teardown() {
     local patch_file="${task_dir}/changes.patch"
 
     # Check permissions (should be 600)
-    local perms
-    perms=$(stat -f "%Lp" "$patch_file" 2>/dev/null || stat -c "%a" "$patch_file" 2>/dev/null)
-    [ "$perms" = "600" ]
+    assert_permissions "$patch_file" "600"
 }
 
 @test "artifacts_capture_diff: is idempotent (overwrites)" {
@@ -833,9 +825,7 @@ teardown() {
     local summary_file="${task_dir}/summary.md"
 
     # Check permissions (should be 600)
-    local perms
-    perms=$(stat -f "%Lp" "$summary_file" 2>/dev/null || stat -c "%a" "$summary_file" 2>/dev/null)
-    [ "$perms" = "600" ]
+    assert_permissions "$summary_file" "600"
 }
 
 @test "artifacts_finalize_task: updates run.json with tasks_completed counter" {
