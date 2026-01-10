@@ -52,8 +52,65 @@ cmd_version() {
     return 0
 }
 
+# Show help for init subcommand
+cmd_init_help() {
+    cat <<'EOF'
+curb init [--global] [<directory>]
+
+Initialize curb in a project or globally.
+
+USAGE:
+  curb init              Initialize in current directory
+  curb init --global    Set up global configuration
+  curb init <dir>       Initialize in specific directory
+
+OPTIONS:
+  --global              Set up global configuration (~/.config/curb)
+                        Creates config templates and hook directories.
+                        Only needs to run once per system.
+
+  <directory>           Directory to initialize (default: current dir)
+                        Creates prd.json, PROMPT.md, AGENT.md, etc.
+
+WHAT IT CREATES:
+  prd.json              Task backlog in JSON format
+  PROMPT.md             System prompt template
+  AGENT.md              Build/run instructions
+  progress.txt          Progress tracking (auto-updated)
+  fix_plan.md           Issue tracking (auto-updated)
+  .gitignore            With curb patterns
+
+GLOBAL SETUP:
+  ~/.config/curb/config.json       Configuration defaults
+  ~/.config/curb/hooks/            Hook directories
+
+EXAMPLES:
+  # Initialize in current directory
+  curb init
+
+  # Initialize specific project
+  curb init ~/my-project
+
+  # Set up system-wide defaults
+  curb init --global
+
+  # Then initialize a project
+  curb init ~/my-project
+
+SEE ALSO:
+  curb --help       Show all commands
+  curb status       Check project status
+EOF
+}
+
 # Init subcommand - initialize a project
 cmd_init() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_init_help
+        return 0
+    fi
+
     # Parse flags
     local global_init=false
     if [[ "${1:-}" == "--global" ]]; then
@@ -354,8 +411,79 @@ EOF
     return 0
 }
 
+# Show help for run subcommand
+cmd_run_help() {
+    cat <<'EOF'
+curb run [<options>]
+
+Run the autonomous coding loop to complete tasks.
+
+USAGE:
+  curb run              Run continuous loop (default behavior)
+  curb run --once       Run exactly one iteration then exit
+  curb run --ready      Show ready (unblocked) tasks without running
+  curb run --plan       Run planning mode to analyze codebase
+
+EXECUTION OPTIONS:
+  --once, -1            Run single iteration then exit
+  --ready, -r           List tasks ready to work on
+  --plan, -p            Generate fix_plan.md with code analysis
+  --push                Push completed work to remote (experimental)
+
+FILTERING:
+  --epic <id>           Only work on tasks in this epic
+  --label <name>        Only work on tasks with this label
+
+MODEL & HARNESS:
+  --model <name>        Claude model: opus, sonnet, haiku
+  --harness <name>      AI harness: claude, codex, gemini, opencode
+
+RELIABILITY:
+  --require-clean       Force clean git state before starting
+  --no-require-clean    Disable clean state check
+
+BUDGET & LIMITS:
+  --budget <tokens>     Token budget limit (e.g., 1000000)
+  --name <name>         Session name for tracking
+
+DEBUG:
+  --debug, -d           Show detailed execution logs
+  --stream              Stream harness output in real-time
+
+EXAMPLES:
+  # Run continuous loop
+  curb run
+
+  # Run once with budget limit
+  curb run --once --budget 1000000
+
+  # View ready tasks without running
+  curb run --ready
+
+  # Work on specific epic only
+  curb run --epic backend-v2
+
+  # Use Sonnet with live output
+  curb run --model sonnet --stream
+
+  # Run with detailed debugging
+  curb run --once --debug
+
+SEE ALSO:
+  curb --help       Show all commands
+  curb status       Check current progress
+  curb artifacts    Access task output files
+EOF
+}
+
 # Run subcommand - run the main loop
 cmd_run() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_run_help
+        return 0
+    fi
+
     # Parse run-specific flags
     local args=()
     local run_once=false
@@ -499,8 +627,57 @@ cmd_run() {
     fi
 }
 
+# Show help for status subcommand
+cmd_status_help() {
+    cat <<'EOF'
+curb status [--json]
+
+Display current task progress and status summary.
+
+USAGE:
+  curb status           Show formatted status summary
+  curb status --json    Output status as machine-readable JSON
+
+OUTPUT:
+  When run without --json:
+    - Task counts (total, closed, in progress, open)
+    - Progress bar showing percentage complete
+    - Current session information (if running)
+    - Most recent run details
+
+  When run with --json:
+    - Machine-readable JSON with task counts
+    - Current session object (if initialized)
+    - Most recent run information
+
+EXAMPLES:
+  # Show human-readable status
+  curb status
+
+  # Check progress before running
+  curb status
+
+  # Get JSON for scripting
+  curb status --json | jq '.task_counts'
+
+  # Monitor while loop runs in background
+  watch -n 5 'curb status'
+
+SEE ALSO:
+  curb run --ready    List tasks ready to work on
+  curb --help         Show all commands
+  curb artifacts      Access task output files
+EOF
+}
+
 # Status subcommand - show task status
 cmd_status() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_status_help
+        return 0
+    fi
+
     local json_output=false
 
     # Parse flags
@@ -528,11 +705,57 @@ cmd_status() {
     fi
 }
 
+# Show help for explain subcommand
+cmd_explain_help() {
+    cat <<'EOF'
+curb explain <task-id>
+
+Show detailed information about a specific task.
+
+USAGE:
+  curb explain <task-id>    Display full task details
+
+OUTPUT INCLUDES:
+  - Task ID and title
+  - Task type (task, feature, bugfix, etc)
+  - Current status (open, in_progress, closed, failed)
+  - Priority level
+  - Full description
+  - Acceptance criteria
+  - Dependencies (tasks that must be completed first)
+  - Labels and other metadata
+
+EXAMPLES:
+  # View task details
+  curb explain curb-018
+
+  # Look up a task's requirements
+  curb explain backend-001
+
+  # Check task dependencies
+  curb explain feature-42
+
+  # Verify acceptance criteria for a task
+  curb explain my-project-15
+
+SEE ALSO:
+  curb status      Check overall progress
+  curb run --ready List ready tasks
+  curb --help      Show all commands
+EOF
+}
+
 # Explain subcommand - show details about a task or session
 cmd_explain() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_explain_help
+        return 0
+    fi
+
     local target="${1:-}"
     if [[ -z "$target" ]]; then
-        _log_error_console "Usage: curb explain <task-id|session-id>"
+        _log_error_console "Usage: curb explain <task-id>"
         return 1
     fi
 
@@ -567,8 +790,63 @@ cmd_explain() {
     fi
 }
 
+# Show help for artifacts subcommand
+cmd_artifacts_help() {
+    cat <<'EOF'
+curb artifacts [<task-id>]
+
+Access and navigate to task artifact directories and output files.
+
+USAGE:
+  curb artifacts              List recent tasks with artifact paths
+  curb artifacts <task-id>    Show path to specific task artifacts
+  curb artifacts <prefix>     Find tasks by ID prefix (partial match)
+
+TASK ARTIFACTS INCLUDE:
+  - task.json              Task metadata and status
+  - summary.md             Execution summary
+  - changes.patch          Git diff of changes made
+  - logs/                  Detailed execution logs
+  - run.json               Run-level information
+
+EXAMPLES:
+  # List all recent tasks
+  curb artifacts
+
+  # Get path to specific task (useful for scripts)
+  curb artifacts curb-018
+  # Output: .curb/runs/panda-20260110-141339/tasks/curb-018
+
+  # Use in shell command
+  cd $(curb artifacts curb-018)
+  cat summary.md
+
+  # Find by prefix (shows matches if ambiguous)
+  curb artifacts curb-01
+
+  # View recent task summary
+  cat $(curb artifacts curb-017)/summary.md
+
+  # Examine git changes made by task
+  patch -p1 -R < $(curb artifacts curb-016)/changes.patch
+
+  # Find task logs
+  ls $(curb artifacts curb-015)/logs/
+
+SEE ALSO:
+  curb status      Check task progress
+  curb --help      Show all commands
+EOF
+}
+
 # Artifacts subcommand - manage artifacts
 cmd_artifacts() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_artifacts_help
+        return 0
+    fi
+
     local artifacts_base=".curb/runs"
 
     # If no arguments given, list recent tasks with paths
@@ -1691,107 +1969,106 @@ Say 'curb test successful' and nothing else."
             cat <<EOF
 curb v${CURB_VERSION} - Claude Under Ralph + Beads
 
-Autonomous AI coding agent that drives coding harnesses (Claude Code, Codex,
-Gemini, OpenCode) in a loop to complete tasks from a project backlog.
+Autonomous AI coding agent that drives harnesses in a loop to complete
+tasks from a project backlog.
+
+SUBCOMMANDS:
+  curb init [--global] [<dir>]  Initialize project or system
+  curb run [<options>]           Run the main loop (default)
+  curb status [--json]           Show task progress
+  curb explain <task-id>         Show task details
+  curb artifacts [<task-id>]     List task outputs
+  curb version                   Show version
 
 QUICK START:
-  curb              Run loop until all tasks complete
-  curb --once       Run single iteration and exit
-  curb status       Show current task status and progress
-  curb status --json    Output status as JSON
-  curb --ready      List tasks ready to be worked on
-  curb --help       Show this help message
+  curb init                      Initialize in current directory
+  curb run                       Start the main loop
+  curb status                    Check progress
+  curb run --ready               List tasks to work on
 
-CORE FLAGS:
-  --harness <name>  Choose harness: "auto" (default), "claude", "codex", "gemini", or "opencode"
-  --model <name>    Claude model: "opus", "sonnet", or "haiku" (default: config)
-  --backend <mode>  Task backend: "auto" (default), "beads", or "json"
-  --budget <tokens> Set token budget limit for this run (e.g., 1000000)
+USE --help WITH ANY SUBCOMMAND:
+  curb init --help               Init subcommand help
+  curb run --help                Run subcommand help
+  curb status --help             Status subcommand help
+  curb explain --help            Explain subcommand help
+  curb artifacts --help          Artifacts subcommand help
 
-RELIABILITY & SAFETY FLAGS:
-  --require-clean   Force clean repository state before starting
-  --no-require-clean  Disable clean state requirement (overrides config)
-  --once            Run exactly one iteration then exit (for CI/testing)
+EXECUTION MODES:
+  curb                           Run continuous loop
+  curb run --once                Single iteration then exit
+  curb run --ready               List ready tasks
+  curb run --plan                Analyze code and plan
 
-DEBUG & TROUBLESHOOTING FLAGS:
-  --debug, -d       Enable verbose debug output:
-                    - Full prompts being sent to harness
-                    - Task selection and JSON details
-                    - Timing and execution information
-  --stream          Stream harness activity in real-time:
-                    - Tool calls as they happen
-                    - Text responses live
-                    - Final result and token usage
-  --plan            Generate fix_plan.md with code analysis
+CORE FLAGS (work with run):
+  --harness <name>               Use specific harness (auto, claude, codex,
+                                 gemini, opencode)
+  --model <name>                 Claude model (opus, sonnet, haiku)
+  --budget <tokens>              Set token budget (e.g., 1000000)
+  --name <name>                  Session name for tracking
 
-FILTERING FLAGS:
-  --epic <id>       Only work on tasks in this epic
-  --label <name>    Only work on tasks with this label
+FILTERING:
+  --epic <id>                    Work on tasks in epic
+  --label <name>                 Work on tasks with label
 
-UTILITY FLAGS:
-  --test            Test harness invocation with sample prompts
-  --dump-prompt     Export current task prompts to files for inspection
-  --migrate-to-beads      Migrate tasks from prd.json to beads
-  --migrate-to-beads-dry-run  Preview migration without changes
+RELIABILITY:
+  --require-clean                Enforce clean git state
+  --no-require-clean             Disable clean state check
 
-ENVIRONMENT VARIABLES:
-  CURB_PROJECT_DIR     Project directory (default: pwd)
-  CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
-  CURB_DEBUG           Set to "true" to enable debug mode
-  CURB_BACKEND         Task backend: "auto", "beads", or "json"
-  CURB_BUDGET          Token budget limit for this run
-  CURB_REQUIRE_CLEAN   Set to "true" or "false" for clean state enforcement
-  HARNESS              Harness to use: "auto", "claude", "codex", "gemini", or "opencode"
-  CURB_MODEL           Claude model: "opus", "sonnet", or "haiku"
-  CURB_EPIC            Filter to tasks within this epic ID
-  CURB_LABEL           Filter to tasks with this label
-  CLAUDE_FLAGS         Extra flags for Claude Code CLI
-  CODEX_FLAGS          Extra flags for OpenAI Codex CLI
+DEBUGGING:
+  --debug, -d                    Show detailed logs
+  --stream                       Stream harness output
+  --backend <mode>               Task backend (auto, beads, json)
+
+UTILITY:
+  --test                         Test harness invocation
+  --dump-prompt                  Export task prompts
+  --migrate-to-beads             Convert prd.json to beads
+  --migrate-to-beads-dry-run     Preview migration
 
 EXAMPLES:
+  curb                           Start main loop
+  curb run --once                Single iteration
+  curb status                    Show progress
+  curb run --ready               List tasks
+  curb run --epic backend-v2     Work on epic
+  curb run --once --debug        Debug one iteration
+  curb run --model sonnet        Use Sonnet model
+  curb artifacts curb-018        Get task output
+  curb explain curb-018          See task details
+  curb init ~/my-project         Initialize project
+  curb init --global             Setup system config
 
-  # Run continuous loop with token budget
-  curb --budget 5000000
-
-  # Single iteration with clean state check
-  curb --once --require-clean
-
-  # Debug a specific epic
-  curb --epic backend-refactor --debug
-
-  # Stream output and limit to specific labels
-  curb --stream --label phase-1
-
-  # Use Sonnet model with budget tracking
-  curb --model sonnet --budget 2000000
-
-  # Check which tasks are ready without running
-  curb --ready
-
-  # View current progress
-  curb status
-
-  # Get status as JSON for scripting
-  curb status --json
+ENVIRONMENT VARIABLES:
+  CURB_PROJECT_DIR               Project directory (default: pwd)
+  CURB_MAX_ITERATIONS            Max loop iterations (default: 100)
+  CURB_DEBUG                     Set to "true" for debug
+  CURB_BACKEND                   Task backend (auto/beads/json)
+  CURB_BUDGET                    Token budget
+  CURB_REQUIRE_CLEAN             Clean state enforcement
+  HARNESS                        Harness to use
+  CURB_MODEL                     Claude model
+  CURB_EPIC                      Epic filter
+  CURB_LABEL                     Label filter
 
 PROJECT FILES:
-  .beads/           Beads task tracking (if using beads backend)
-  prd.json          Task backlog JSON (if using json backend)
-  PROMPT.md         System prompt template
-  AGENT.md          Build/run instructions for AI agent
-  specs/            Specification files
-  progress.txt      Automatically generated progress log
+  prd.json                       Task backlog (json backend)
+  .beads/                        Task tracking (beads backend)
+  PROMPT.md                      System prompt template
+  AGENT.md                       Build/run instructions
+  specs/                         Specification files
+  progress.txt                   Progress log
+  fix_plan.md                    Issue tracking
+
+LEARN MORE:
+  README.md                      Overview and features
+  CONFIG.md                      Configuration options
+  CONTRIBUTING.md                Development guidelines
 
 INSTALLATION:
-  Beads (optional, for beads backend):
+  Beads (optional):
     brew install steveyegge/beads/bd
     npm install -g @beads/bd
     go install github.com/steveyegge/beads/cmd/bd@latest
-
-LEARN MORE:
-  README.md         Project overview and features
-  CONFIG.md         Configuration and environment setup
-  CONTRIBUTING.md   Development guidelines
 EOF
             ;;
         --version)
