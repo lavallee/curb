@@ -110,7 +110,7 @@ harness_get_total_tokens() {
 # ============================================================================
 
 # Detect available harness
-# Priority: explicit HARNESS setting > claude > codex > gemini
+# Priority: explicit HARNESS setting > claude > opencode > codex > gemini
 harness_detect() {
     # If explicitly set, use that
     if [[ -n "${HARNESS:-}" && "$HARNESS" != "auto" ]]; then
@@ -119,9 +119,11 @@ harness_detect() {
         return 0
     fi
 
-    # Auto-detect: prefer claude, fallback to codex, then gemini
+    # Auto-detect: prefer claude, then opencode, fallback to codex, then gemini
     if command -v claude >/dev/null 2>&1; then
         _HARNESS="claude"
+    elif command -v opencode >/dev/null 2>&1; then
+        _HARNESS="opencode"
     elif command -v codex >/dev/null 2>&1; then
         _HARNESS="codex"
     elif command -v gemini >/dev/null 2>&1; then
@@ -152,7 +154,7 @@ harness_available() {
     fi
 
     # Check if any harness is available
-    command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v gemini >/dev/null 2>&1
+    command -v claude >/dev/null 2>&1 || command -v opencode >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v gemini >/dev/null 2>&1
 }
 
 # Get version of current harness
@@ -162,6 +164,9 @@ harness_version() {
     case "$harness" in
         claude)
             claude --version 2>&1 || echo "unknown"
+            ;;
+        opencode)
+            opencode --version 2>&1 || echo "unknown"
             ;;
         codex)
             codex --version 2>&1 || echo "unknown"
@@ -192,6 +197,9 @@ harness_invoke() {
         claude)
             claude_invoke "$system_prompt" "$task_prompt" "$debug"
             ;;
+        opencode)
+            opencode_invoke "$system_prompt" "$task_prompt" "$debug"
+            ;;
         codex)
             codex_invoke "$system_prompt" "$task_prompt" "$debug"
             ;;
@@ -217,6 +225,9 @@ harness_invoke_streaming() {
     case "$harness" in
         claude)
             claude_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
+            ;;
+        opencode)
+            opencode_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
             ;;
         codex)
             codex_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
@@ -463,4 +474,141 @@ gemini_invoke_streaming() {
     # TODO: Test newer versions for streaming support
     # For now, streaming mode just runs the same as non-streaming
     gemini_invoke "$system_prompt" "$task_prompt" "$debug"
+}
+
+# ============================================================================
+# OpenCode Backend
+# ============================================================================
+
+opencode_invoke() {
+    local system_prompt="$1"
+    local task_prompt="$2"
+    local debug="${3:-false}"
+
+    # Clear previous usage
+    harness_clear_usage
+
+    # OpenCode doesn't have --append-system-prompt, so we combine prompts
+    # The system prompt goes first, then a separator, then the task
+    # Note: For production use, consider using AGENTS.md file instead
+    local combined_prompt="${system_prompt}
+
+---
+
+${task_prompt}"
+
+    local flags=""
+    [[ "$debug" == "true" ]] && flags="$flags --print-logs --log-level DEBUG"
+
+    # Add model flag if specified (requires provider/model format)
+    if [[ -n "${CURB_MODEL:-}" ]]; then
+        # If model doesn't contain '/', assume anthropic provider
+        if [[ "$CURB_MODEL" != */* ]]; then
+            flags="$flags -m anthropic/$CURB_MODEL"
+        else
+            flags="$flags -m $CURB_MODEL"
+        fi
+    fi
+
+    # Add any extra flags from environment
+    [[ -n "${OPENCODE_FLAGS:-}" ]] && flags="$flags $OPENCODE_FLAGS"
+
+    # OpenCode uses 'run' subcommand for autonomous operation (auto-approves all permissions)
+    # Note: Token usage not extracted in non-streaming mode
+    opencode run $flags "$combined_prompt"
+    local exit_code=$?
+
+    # Store zero usage (token reporting requires --format json in streaming mode)
+    _harness_store_usage 0 0 0 0 ""
+
+    return $exit_code
+}
+
+opencode_invoke_streaming() {
+    local system_prompt="$1"
+    local task_prompt="$2"
+    local debug="${3:-false}"
+
+    # Clear previous usage
+    harness_clear_usage
+
+    local combined_prompt="${system_prompt}
+
+---
+
+${task_prompt}"
+
+    # Use --format json for structured streaming output
+    local flags="--format json"
+    [[ "$debug" == "true" ]] && flags="$flags --print-logs --log-level DEBUG"
+
+    # Add model flag if specified
+    if [[ -n "${CURB_MODEL:-}" ]]; then
+        if [[ "$CURB_MODEL" != */* ]]; then
+            flags="$flags -m anthropic/$CURB_MODEL"
+        else
+            flags="$flags -m $CURB_MODEL"
+        fi
+    fi
+
+    # Add any extra flags from environment
+    [[ -n "${OPENCODE_FLAGS:-}" ]] && flags="$flags $OPENCODE_FLAGS"
+
+    # Pipe to parser for token extraction
+    opencode run $flags "$combined_prompt" | opencode_parse_stream
+    return ${PIPESTATUS[0]}
+}
+
+# Parse OpenCode's JSON streaming output
+# Extracts text output for display and captures token usage from step_finish events
+opencode_parse_stream() {
+    # Clear previous usage before parsing new stream
+    harness_clear_usage
+
+    # Local variables for accumulating usage across multiple steps
+    local total_input=0
+    local total_output=0
+    local total_cache_read=0
+    local total_cache_write=0
+    local total_reasoning=0
+    local final_cost=""
+
+    while IFS= read -r line; do
+        # Skip empty lines
+        [[ -z "$line" ]] && continue
+
+        # Parse JSON and extract relevant info
+        local msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+
+        case "$msg_type" in
+            "text")
+                # Extract and display text content
+                local text=$(echo "$line" | jq -r '.part.text // empty' 2>/dev/null)
+                [[ -n "$text" ]] && printf "%s" "$text"
+                ;;
+            "step_finish")
+                # Extract token usage from step_finish events
+                # OpenCode structure: .part.tokens.input, .part.tokens.output, etc.
+                local input=$(echo "$line" | jq -r '.part.tokens.input // 0' 2>/dev/null)
+                local output=$(echo "$line" | jq -r '.part.tokens.output // 0' 2>/dev/null)
+                local reasoning=$(echo "$line" | jq -r '.part.tokens.reasoning // 0' 2>/dev/null)
+                local cache_read=$(echo "$line" | jq -r '.part.tokens.cache.read // 0' 2>/dev/null)
+                local cache_write=$(echo "$line" | jq -r '.part.tokens.cache.write // 0' 2>/dev/null)
+                local cost=$(echo "$line" | jq -r '.part.cost // empty' 2>/dev/null)
+
+                # Accumulate usage (multiple steps possible in a session)
+                total_input=$((total_input + input))
+                total_output=$((total_output + output))
+                total_reasoning=$((total_reasoning + reasoning))
+                total_cache_read=$((total_cache_read + cache_read))
+                total_cache_write=$((total_cache_write + cache_write))
+                [[ -n "$cost" && "$cost" != "null" ]] && final_cost="$cost"
+                ;;
+        esac
+    done
+
+    # Store accumulated usage
+    # Note: OpenCode reports cache.write, which maps to cache_creation_tokens
+    # Reasoning tokens are not currently tracked separately (included in output for simplicity)
+    _harness_store_usage "$total_input" "$total_output" "$total_cache_read" "$total_cache_write" "$final_cost"
 }
