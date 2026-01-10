@@ -40,22 +40,15 @@ jobs:
           export -f curb_config_dir
           echo "TEST_DIR: $TEST_DIR"
           echo "curb_config_dir: $(curb_config_dir)"
-
-          # Try creating a hook
           hook_dir="$(curb_config_dir)/hooks/pre-task.d"
           mkdir -p "$hook_dir"
-          echo '#!/bin/bash
-echo "test"' > "$hook_dir/test.sh"
+          printf '#!/bin/bash\necho "test"\n' > "$hook_dir/test.sh"
           chmod +x "$hook_dir/test.sh"
-
           echo "Created hook:"
           ls -la "$hook_dir/"
           cat "$hook_dir/test.sh"
-          echo ""
           echo "Running hook:"
           "$hook_dir/test.sh"
-
-          echo ""
           echo "=== Running hooks.bats test 2 in isolation ==="
           cd "$GITHUB_WORKSPACE"
           bats --filter "hooks_run executes script in global directory" tests/hooks.bats 2>&1 || echo "Test failed with exit code $?"
