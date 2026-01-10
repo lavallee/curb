@@ -1095,7 +1095,7 @@ Line 3"
     git commit -q -m "Test commit"
 
     # Force push with "no" confirmation should fail
-    run bash -c 'echo "no" | git_push_branch --force'
+    run bash -c "source '${PROJECT_ROOT}/lib/git.sh' && echo 'no' | git_push_branch --force"
     [[ $status -eq 1 ]]
     [[ "$output" =~ "Force push cancelled" ]]
 
@@ -1125,7 +1125,7 @@ Line 3"
     git commit -q --amend --no-edit
 
     # Force push with "yes" confirmation should succeed
-    run bash -c 'echo "yes" | git_push_branch --force'
+    run bash -c "source '${PROJECT_ROOT}/lib/git.sh' && echo 'yes' | git_push_branch --force"
     [[ $status -eq 0 ]]
     [[ "$output" =~ "Successfully force pushed branch" ]]
 
@@ -1155,7 +1155,7 @@ Line 3"
     git commit -q --amend --no-edit
 
     # Verify --force-with-lease is mentioned in output (shows it's being used)
-    run bash -c 'echo "yes" | git_push_branch --force'
+    run bash -c "source '${PROJECT_ROOT}/lib/git.sh' && echo 'yes' | git_push_branch --force"
     [[ $status -eq 0 ]]
 
     # Cleanup
@@ -1290,11 +1290,11 @@ Line 3"
     git commit -q -m "Test"
 
     # Force push without confirmation should fail
-    run bash -c 'echo "no" | git_push_branch --force'
+    run bash -c "source '${PROJECT_ROOT}/lib/git.sh' && echo 'no' | git_push_branch --force"
     [[ $status -eq 1 ]]
 
     # Force push with confirmation should succeed
-    run bash -c 'echo "yes" | git_push_branch --force'
+    run bash -c "source '${PROJECT_ROOT}/lib/git.sh' && echo 'yes' | git_push_branch --force"
     [[ $status -eq 0 ]]
 
     # Cleanup
