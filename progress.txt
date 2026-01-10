@@ -3431,3 +3431,48 @@ Both functions follow the established pattern:
 - Added debug logging to task functions helps troubleshooting
 - Include guards prevent accidental variable resets
 - Explicit global variable assignments improve reliability over relying on subshell side effects
+
+## Session: Artifacts Test Enhancement (curb-009)
+
+### Task: Write BATS tests for lib/artifacts.sh
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. Enhanced existing comprehensive test suite in `tests/artifacts.bats`
+   - Added direct tests for helper functions that were previously only tested indirectly:
+     - `artifacts_get_run_dir()` - Tests session initialization requirement and path format
+     - `artifacts_get_task_dir()` - Tests task_id validation and path format generation
+     - `artifacts_ensure_dirs()` - Tests directory creation with secure 700 permissions
+   - All 60 tests pass successfully (increased from 53)
+
+### Test Coverage:
+- **Run management**: artifacts_init_run creates run.json with correct schema
+- **Task lifecycle**: artifacts_start_task, artifacts_finalize_task
+- **Artifact capture**: artifacts_capture_plan, artifacts_capture_command, artifacts_capture_diff
+- **Path utilities**: artifacts_get_path returns absolute paths
+- **JSON validation**: All tests verify JSON structure with jq
+- **Isolation**: All tests use isolated temp directories via setup_test_dir()
+
+### Test Results:
+- All 60 artifacts tests PASS
+- All existing tests continue to pass (435 total)
+- 3 unrelated failures in curb.bats (tests 123, 124, 126) - not related to this task
+
+### Learnings:
+- Existing test file was already comprehensive, covering all main functions
+- Helper functions (get_run_dir, get_task_dir, ensure_dirs) lacked direct tests
+- Adding direct tests for helper functions provides better diagnostic information on failures
+- Permission tests (700 for directories, 600 for files) verify security requirements
+- BATS test pattern: Use `run` for command testing, check `$status` and `$output`
+- Test temp directories are automatically cleaned up by teardown_test_dir()
+- JSON validation with `jq empty` and `jq -r` for field extraction is standard pattern
+
+### Files Modified:
+- tests/artifacts.bats: Added 7 new tests for helper functions
+
+### Acceptance Criteria Met:
+✓ tests/artifacts.bats exists
+✓ All artifacts functions have test coverage
+✓ Tests verify JSON structure with jq
+✓ Tests use isolated temp directories
