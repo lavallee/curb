@@ -98,7 +98,34 @@ check_deps() {
     fi
 
     # Log which harness is active
-    log_debug "Harness: $(harness_get)"
+    local current_harness
+    current_harness=$(harness_get)
+    log_debug "Harness: ${current_harness}"
+
+    # Log harness capabilities in debug mode
+    if [[ "$DEBUG" == "true" ]]; then
+        log_debug "Harness capabilities:"
+        if harness_supports "streaming"; then
+            log_debug "  - streaming: yes"
+        else
+            log_debug "  - streaming: no (will use non-streaming mode)"
+        fi
+        if harness_supports "token_reporting"; then
+            log_debug "  - token_reporting: yes"
+        else
+            log_debug "  - token_reporting: no (will estimate from cost)"
+        fi
+        if harness_supports "system_prompt"; then
+            log_debug "  - system_prompt: yes"
+        else
+            log_debug "  - system_prompt: no (will combine prompts)"
+        fi
+        if harness_supports "auto_mode"; then
+            log_debug "  - auto_mode: yes"
+        else
+            log_debug "  - auto_mode: no (may require manual approval)"
+        fi
+    fi
 }
 
 # Validate project structure

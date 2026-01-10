@@ -379,3 +379,163 @@ EOF
     [ "$output_tokens" -eq 100 ]
     [ "$cost" = "0.02" ]
 }
+
+# =============================================================================
+# Harness Capability Detection Tests
+# =============================================================================
+
+@test "harness_supports returns success for supported capability" {
+    run harness_supports "streaming" "claude"
+    [ "$status" -eq 0 ]
+}
+
+@test "harness_supports returns failure for unsupported capability" {
+    run harness_supports "streaming" "codex"
+    [ "$status" -ne 0 ]
+}
+
+@test "harness_supports requires capability argument" {
+    run harness_supports
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"requires a capability name"* ]]
+}
+
+@test "harness_supports uses current harness when not specified" {
+    _HARNESS="claude"
+    run harness_supports "streaming"
+    [ "$status" -eq 0 ]
+}
+
+@test "_harness_get_capabilities returns correct capabilities for claude" {
+    run _harness_get_capabilities "claude"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"streaming"* ]]
+    [[ "$output" == *"token_reporting"* ]]
+    [[ "$output" == *"system_prompt"* ]]
+    [[ "$output" == *"auto_mode"* ]]
+}
+
+@test "_harness_get_capabilities returns correct capabilities for opencode" {
+    run _harness_get_capabilities "opencode"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"streaming"* ]]
+    [[ "$output" == *"token_reporting"* ]]
+    [[ "$output" != *"system_prompt"* ]]
+    [[ "$output" == *"auto_mode"* ]]
+}
+
+@test "_harness_get_capabilities returns correct capabilities for codex" {
+    run _harness_get_capabilities "codex"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"streaming"* ]]
+    [[ "$output" != *"token_reporting"* ]]
+    [[ "$output" == *"auto_mode"* ]]
+}
+
+@test "_harness_get_capabilities returns correct capabilities for gemini" {
+    run _harness_get_capabilities "gemini"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"streaming"* ]]
+    [[ "$output" != *"token_reporting"* ]]
+    [[ "$output" == *"auto_mode"* ]]
+}
+
+@test "_harness_get_capabilities returns empty for unknown harness" {
+    run _harness_get_capabilities "nonexistent"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "harness_get_capabilities_json returns valid JSON for claude" {
+    run harness_get_capabilities_json "claude"
+    [ "$status" -eq 0 ]
+
+    # Verify JSON structure
+    local harness=$(echo "$output" | jq -r '.harness')
+    local streaming=$(echo "$output" | jq -r '.streaming')
+    local token_reporting=$(echo "$output" | jq -r '.token_reporting')
+    local system_prompt=$(echo "$output" | jq -r '.system_prompt')
+    local auto_mode=$(echo "$output" | jq -r '.auto_mode')
+
+    [ "$harness" = "claude" ]
+    [ "$streaming" = "true" ]
+    [ "$token_reporting" = "true" ]
+    [ "$system_prompt" = "true" ]
+    [ "$auto_mode" = "true" ]
+}
+
+@test "harness_get_capabilities_json returns valid JSON for codex" {
+    run harness_get_capabilities_json "codex"
+    [ "$status" -eq 0 ]
+
+    local harness=$(echo "$output" | jq -r '.harness')
+    local streaming=$(echo "$output" | jq -r '.streaming')
+    local token_reporting=$(echo "$output" | jq -r '.token_reporting')
+    local auto_mode=$(echo "$output" | jq -r '.auto_mode')
+
+    [ "$harness" = "codex" ]
+    [ "$streaming" = "false" ]
+    [ "$token_reporting" = "false" ]
+    [ "$auto_mode" = "true" ]
+}
+
+@test "capability constants are defined" {
+    [ "$HARNESS_CAP_STREAMING" = "streaming" ]
+    [ "$HARNESS_CAP_TOKEN_REPORTING" = "token_reporting" ]
+    [ "$HARNESS_CAP_SYSTEM_PROMPT" = "system_prompt" ]
+    [ "$HARNESS_CAP_AUTO_MODE" = "auto_mode" ]
+}
+
+# =============================================================================
+# Capability Acceptance Tests
+# =============================================================================
+
+@test "ACCEPTANCE: Can query if harness supports streaming" {
+    # Claude supports streaming
+    run harness_supports "streaming" "claude"
+    [ "$status" -eq 0 ]
+
+    # Codex does not support streaming
+    run harness_supports "streaming" "codex"
+    [ "$status" -ne 0 ]
+}
+
+@test "ACCEPTANCE: Can query if harness reports tokens" {
+    # Claude reports tokens
+    run harness_supports "token_reporting" "claude"
+    [ "$status" -eq 0 ]
+
+    # OpenCode reports tokens
+    run harness_supports "token_reporting" "opencode"
+    [ "$status" -eq 0 ]
+
+    # Codex does not report tokens
+    run harness_supports "token_reporting" "codex"
+    [ "$status" -ne 0 ]
+
+    # Gemini does not report tokens
+    run harness_supports "token_reporting" "gemini"
+    [ "$status" -ne 0 ]
+}
+
+@test "ACCEPTANCE: All known harnesses have auto_mode capability" {
+    # All harnesses should support auto_mode for autonomous operation
+    for harness in claude opencode codex gemini; do
+        run harness_supports "auto_mode" "$harness"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "ACCEPTANCE: Degraded mode works when capability missing" {
+    # Unknown harness has no capabilities
+    run harness_supports "streaming" "unknown_harness"
+    [ "$status" -ne 0 ]
+
+    # Can check and adapt
+    if ! harness_supports "streaming" "codex"; then
+        # This branch should execute for codex
+        true
+    else
+        false
+    fi
+}

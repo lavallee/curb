@@ -10,6 +10,142 @@
 _HARNESS=""
 
 # ============================================================================
+# Harness Capability Detection
+# ============================================================================
+#
+# Different harnesses have different capabilities. This section provides
+# a unified way to query what features a harness supports so the main loop
+# can adapt its behavior accordingly.
+#
+# Capabilities:
+#   streaming        - Supports real-time streaming output with --output-format stream-json
+#   token_reporting  - Reports token usage after invocation
+#   system_prompt    - Supports separate system prompt (--append-system-prompt)
+#   auto_mode        - Has autonomous/auto-approve mode for unattended operation
+#
+# Usage:
+#   if harness_supports "streaming"; then
+#       harness_invoke_streaming "$sys" "$task"
+#   else
+#       harness_invoke "$sys" "$task"
+#   fi
+
+# Capability constants (for documentation and consistency)
+readonly HARNESS_CAP_STREAMING="streaming"
+readonly HARNESS_CAP_TOKEN_REPORTING="token_reporting"
+readonly HARNESS_CAP_SYSTEM_PROMPT="system_prompt"
+readonly HARNESS_CAP_AUTO_MODE="auto_mode"
+
+# Get capabilities for a specific harness
+# Returns a space-separated list of supported capabilities
+# Usage: _harness_get_capabilities [harness]
+_harness_get_capabilities() {
+    local harness="${1:-$(harness_get)}"
+
+    case "$harness" in
+        claude)
+            # Claude Code: Full featured - streaming, token reporting, system prompts, auto mode
+            # - Streaming via --output-format stream-json
+            # - Token reporting via .usage in JSON output
+            # - System prompt via --append-system-prompt
+            # - Auto mode via --dangerously-skip-permissions
+            echo "streaming token_reporting system_prompt auto_mode"
+            ;;
+        opencode)
+            # OpenCode: Streaming with token reporting, no separate system prompt
+            # - Streaming via --format json (outputs step_finish events with token counts)
+            # - Token reporting via .part.tokens in step_finish events
+            # - No system prompt flag (must combine prompts)
+            # - Auto mode via 'run' subcommand (auto-approves all permissions)
+            echo "streaming token_reporting auto_mode"
+            ;;
+        codex)
+            # Codex: Basic auto mode only, no streaming or token reporting
+            # - No streaming output format (passthrough only)
+            # - No token reporting in CLI output
+            # - No system prompt flag (must combine prompts)
+            # - Auto mode via --full-auto
+            echo "auto_mode"
+            ;;
+        gemini)
+            # Gemini CLI: Basic auto mode only
+            # - No streaming output format (v0.1.9 doesn't support --output-format stream-json)
+            # - No token reporting in CLI output
+            # - No system prompt flag (must combine prompts)
+            # - Auto mode via -y (YOLO mode, auto-accept all actions)
+            echo "auto_mode"
+            ;;
+        *)
+            # Unknown harness - return empty (no capabilities)
+            echo ""
+            ;;
+    esac
+}
+
+# Check if current harness supports a specific capability
+# Returns 0 (success) if supported, 1 (failure) if not
+# Usage: harness_supports "capability_name"
+# Usage: harness_supports "capability_name" "harness_name"
+harness_supports() {
+    local capability="$1"
+    local harness="${2:-$(harness_get)}"
+
+    if [[ -z "$capability" ]]; then
+        echo "Error: harness_supports requires a capability name" >&2
+        return 1
+    fi
+
+    local caps
+    caps=$(_harness_get_capabilities "$harness")
+
+    # Check if capability is in the space-separated list
+    case " $caps " in
+        *" $capability "*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Get all capabilities for the current harness as JSON
+# Useful for logging and debugging
+# Usage: harness_get_capabilities_json [harness]
+harness_get_capabilities_json() {
+    local harness="${1:-$(harness_get)}"
+    local caps
+    caps=$(_harness_get_capabilities "$harness")
+
+    # Build JSON object with all capability flags
+    local streaming="false"
+    local token_reporting="false"
+    local system_prompt="false"
+    local auto_mode="false"
+
+    case " $caps " in
+        *" streaming "*) streaming="true" ;;
+    esac
+    case " $caps " in
+        *" token_reporting "*) token_reporting="true" ;;
+    esac
+    case " $caps " in
+        *" system_prompt "*) system_prompt="true" ;;
+    esac
+    case " $caps " in
+        *" auto_mode "*) auto_mode="true" ;;
+    esac
+
+    jq -n \
+        --arg harness "$harness" \
+        --argjson streaming "$streaming" \
+        --argjson token_reporting "$token_reporting" \
+        --argjson system_prompt "$system_prompt" \
+        --argjson auto_mode "$auto_mode" \
+        '{harness: $harness, streaming: $streaming, token_reporting: $token_reporting, system_prompt: $system_prompt, auto_mode: $auto_mode}'
+}
+
+# ============================================================================
 # Token Usage Tracking (file-based to survive command substitution)
 # ============================================================================
 
