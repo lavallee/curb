@@ -1371,3 +1371,107 @@ Budget enforcement is complete. Next task:
 - Kept warning message in main script loop for better integration with logging
 - Made threshold configurable via budget.warn_at config
 - Default 80% threshold aligns with acceptance criteria
+
+## Session: Phase 2 Checkpoint - Reliability Complete (curb-fxr)
+
+### Task: Checkpoint: Reliability Complete
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was validated:
+Phase 2 implementation is complete and fully functional. All critical reliability features have been implemented and tested:
+
+1. **Clean State Enforcement**
+   - Function: `state_ensure_clean()` in lib/state.sh
+   - Detects: uncommitted changes, staged changes, untracked files, deleted files
+   - Config: `clean_state.require_commit` (true to enforce, false to warn)
+   - Integration: Called after successful harness run in run_iteration()
+   - Test coverage: 11 tests covering all scenarios
+
+2. **Optional Test Requirement**
+   - Function: `state_run_tests()` in lib/state.sh
+   - Detection: Auto-detects npm, yarn, make, pytest, go test, cargo test
+   - Config: `test.require_tests` (true to enforce, false to skip)
+   - Integration: Called after clean state check if harness succeeded
+   - Test coverage: 8 tests covering detection and execution
+   - Logging: Test output captured and logged for inspection
+
+3. **Token Budget Tracking**
+   - Functions: `budget_init()`, `budget_record()`, `budget_remaining()` in lib/budget.sh
+   - Token extraction: `harness_get_total_tokens()` from harness output
+   - State: File-based tracking at `${TMPDIR:-/tmp}/curb_budget_*_$$`
+   - Integration: Tokens recorded after each task completes
+   - Test coverage: 17 tests covering budget operations
+   - Logging: Budget state included in task_end events
+
+4. **Budget Enforcement**
+   - Function: `budget_check()` in lib/budget.sh
+   - Location: Main loop checks after each iteration (run_loop)
+   - Behavior: Graceful exit (return 0) when budget exceeded
+   - Message: "Budget exceeded (used X of Y tokens)"
+   - Design: Let current task complete fully before checking budget
+   - Test coverage: 3 tests covering enforcement scenarios
+
+5. **Budget Warnings**
+   - Function: `budget_check_warning()` in lib/budget.sh
+   - Threshold: Configurable via `budget.warn_at` (default 80%)
+   - Frequency: Warned only once per run (file-based state tracking)
+   - Location: Called after budget_record in run_iteration()
+   - Message: Includes percentage used and tokens remaining
+   - Test coverage: 7 tests covering threshold behavior
+
+### Test Results:
+- **All 273 tests PASS** (100% pass rate)
+- No regressions from Phase 1 code
+- All acceptance criteria tests passing
+- Test coverage for all checkpoint features complete
+
+### Verified Workflows:
+1. ✓ `./curb` runs main loop with full reliability checks
+2. ✓ `./curb --once` runs single iteration with all checks
+3. ✓ Clean state enforcement prevents uncommitted changes from going undetected
+4. ✓ Test requirement can be enabled/disabled per project
+5. ✓ Budget tracking accumulates tokens across iterations
+6. ✓ Budget enforcement stops loop gracefully when exceeded
+7. ✓ Budget warnings alert user at 80% usage (configurable)
+8. ✓ Structured logs include all budget and state information
+
+### Key Features Ready:
+- Clean state detection: uncommitted changes, staged changes, untracked files
+- Test automation: npm, yarn, make, pytest, go test, cargo test
+- Token budget: per-task tracking and per-run enforcement
+- Budget warnings: at configurable threshold (default 80%)
+- Structured logging: JSONL format with task lifecycle events
+
+### Answers to Checkpoint Questions:
+1. **Is the clean state check too strict or not strict enough?**
+   - Current implementation detects all uncommitted changes
+   - `require_commit` config allows flexibility (warn vs enforce)
+   - Recommended: Keep strict by default, allow per-project override
+
+2. **Is token counting accurate enough for your needs?**
+   - Token extraction uses harness implementation
+   - Claude Code: Extracts from "Usage:" line in output
+   - Accuracy depends on harness implementation quality
+   - Currently works well for Claude Code harness
+
+3. **Should budget be enforceable per-task as well as per-run?**
+   - Current design: Enforced per-run (stops entire loop)
+   - Per-task enforcement would require different approach
+   - Recommendation: Keep per-run for now, revisit in Phase 4
+
+### Learnings Summary:
+- **State management**: File-based approach (temp files) works well for per-session state
+- **Feature gradation**: Optional config values allow flexibility without breaking changes
+- **Exit code semantics**: Distinguish between errors (return 1) and expected behavior (return 0)
+- **Structured logging**: Adding optional fields maintains backward compatibility
+- **Test architecture**: Comprehensive BATS test suite catches regressions early
+- **Integration patterns**: Clean separation between libraries and main loop
+
+### Next Steps:
+Phase 2 is complete and production-ready for:
+- Unattended runs with confidence
+- Budget-aware autonomous sessions
+- Reliable state management and test execution
+
+Ready to proceed to Phase 3: Extensibility (hooks, new harnesses)
