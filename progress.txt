@@ -3244,3 +3244,75 @@ All three functions follow the same pattern:
 5. Set 600 permissions on created files
 6. Return 0 on success, 1 on failure with error message to stderr
 
+
+## Session: Implement artifacts_finalize_task and summary generation (curb-006)
+
+### Task: Add task finalization and summary generation
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. `artifacts_finalize_task(task_id, status, exit_code, summary_text)` - Finalize task with status
+   - Updates task.json in place with jq:
+     * Sets final status (completed/failed/etc)
+     * Adds completed_at timestamp (ISO 8601)
+     * Sets exit_code
+     * Increments iterations counter
+   - Generates human-readable summary.md:
+     * Task title, ID, status, exit code
+     * Duration calculation (handles both GNU and BSD date)
+     * Files changed count (parsed from changes.patch)
+     * User-provided summary text (or "No summary provided")
+     * Timeline with started_at and completed_at
+   - Updates run.json counters (tasks_completed or tasks_failed)
+   - Sets 600 permissions on summary.md
+
+2. `artifacts_get_path(task_id)` - Get absolute path to artifacts
+   - Returns full absolute path to task directory
+   - Useful for external tools accessing artifacts
+   - Converts relative path from artifacts_get_task_dir to absolute
+
+### Test Results:
+- 18 new tests added for new functions
+- All 53 artifact tests PASS
+- Fixed 2 pre-existing flawed tests discovered during implementation
+
+### Learnings:
+- **BATS and errexit**: BATS runs tests with error handling enabled. Commands that might fail need `|| true` to prevent immediate test failure even when you're handling the error
+  - Changed: `diff_output=$(git diff HEAD 2>/dev/null) || true`
+  - This allows capturing the exit code while preventing BATS from failing the test
+- **Date arithmetic portability**: macOS uses BSD date, Linux uses GNU date
+  - GNU date: `date -d "$timestamp" +%s`
+  - BSD date: `date -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s`
+  - Check for GNU date with `date --version >/dev/null 2>&1`
+- **Duration formatting**: Format durations nicely for humans
+  - <60s: "42s"
+  - <3600s: "5m 23s"
+  - ≥3600s: "2h 15m"
+- **Files changed counting**: Parse git diff output to count changed files
+  - `grep -E '^(\+\+\+|---) ' "$patch_file"` - finds file headers
+  - `grep -v '/dev/null'` - excludes deleted/created markers
+  - `sed 's|^[+-]\{3\} [ab]/||'` - strips diff prefixes
+  - `sort -u` - deduplicates (each file has two headers)
+- **Markdown formatting**: Summary.md uses markdown with bold fields
+  - Pattern `**Duration:** 2s` requires escaping in regex: `\*\*Duration:\*\*`
+- **Flawed test discovery**: Test "artifacts_capture_diff: is idempotent" was failing since commit e6df23a
+  - Test expected untracked files to appear in `git diff` (they don't)
+  - Fixed by creating committed file first, then modifying it
+- **jq field manipulation**: Use `if has($field) then ... else ...` to initialize or increment
+  - Example: `'if has($field) then .[$field] = (.[$field] + 1) else .[$field] = 1 end'`
+- **Optional parameters in bash**: Use `${4:-}` for optional positional parameters to avoid unbound variable errors
+
+### Implementation Patterns:
+Both functions follow the established pattern:
+1. Validate required arguments
+2. Get task/run directory path
+3. Perform JSON updates with jq
+4. Generate additional artifacts (summary.md)
+5. Set appropriate permissions
+6. Return 0 on success, 1 on failure with stderr messages
+
+### Dependencies & Next Tasks:
+- curb-006 is now complete
+- Artifacts system is now fully functional for task lifecycle tracking
+- Main loop can now: init_run → start_task → capture_plan/command/diff → finalize_task
