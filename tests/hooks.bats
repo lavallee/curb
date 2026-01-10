@@ -55,7 +55,7 @@ create_hook() {
     fi
 
     mkdir -p "$hook_dir"
-    echo "$script_content" > "$hook_dir/$script_name"
+    printf '%s\n' "$script_content" > "$hook_dir/$script_name"
     chmod +x "$hook_dir/$script_name"
 }
 
