@@ -37,3 +37,54 @@
 - curb-iwv is now complete and unblocks:
   - curb-et7: Implement logger.sh (depends on xdg.sh)
   - curb-1l6: Implement config.sh (depends on xdg.sh)
+
+## Session 2: Config Interface Implementation (curb-1l6)
+
+### Task: Implement config.sh with config_get interface
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was verified:
+1. Found `lib/config.sh` already implemented with full functionality
+   - `config_load()` - Reads and merges config files (project overrides user)
+   - `config_get(key)` - Extracts values using jq with dot-notation
+   - `config_get_or(key, default)` - Provides fallback defaults
+   - `config_clear_cache()` - Clears cache for testing
+   - `config_dump()` - Returns full cached config for debugging
+
+2. Verified comprehensive test suite in `tests/config.bats`
+   - 24 tests covering all config functions
+   - Tests for basic get operations, merging, caching, and edge cases
+   - All acceptance criteria tests passing
+
+### Test Results:
+- All 24 config-specific tests PASS
+- All 115 existing tests continue to PASS
+- Total: 139 tests passing
+
+### Learnings:
+- **File-based caching is essential for bash**: Used `_CONFIG_CACHE_FILE` instead of variable because bash command substitution `$(func)` creates subshells, which don't preserve variable modifications
+- **Exit codes matter**: `config_get` returns exit code 1 when key not found, enabling `config_get_or` to detect missing values
+- **jq type handling**: Different jq flags needed for different value types:
+  - `-r` (raw) for strings to remove JSON quotes
+  - `-c` (compact) for arrays/objects to preserve JSON structure
+  - Default (no flag) to detect type first, then choose appropriate extraction
+- **Test isolation**: Each BATS test gets its own temp directory via `${BATS_TMPDIR}`, and we override `curb_config_dir()` to point to test directory
+- **XDG integration**: Config module sources `xdg.sh` to find config directory at `$(curb_config_dir)/config.json`
+- **Beads CLI**: This project uses `bd` (beads) for task management instead of prd.json:
+  - Tasks stored in `.beads/issues.jsonl`
+  - Use `bd close <id> -r "reason"` to close tasks
+  - Use `bd list --status <status>` to query tasks
+
+### Implementation Details:
+- Config precedence: project (`./.curb.json`) > user (`~/.config/curb/config.json`)
+- Invalid JSON handled gracefully with warnings to stderr
+- Null values treated as missing (return exit code 1)
+- Cache persists across function calls within same shell session
+- Trap ensures cache file cleanup on exit
+
+### Task Already Complete:
+The implementation was already present in the repository and working correctly. The task status was "in_progress" but all code and tests were complete. This session primarily involved:
+1. Verifying the implementation against specifications
+2. Running comprehensive test suite
+3. Closing the task in beads system
