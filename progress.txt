@@ -1823,3 +1823,186 @@ Future enhancements could include:
 - Example hook scripts in templates/hooks/
 - Documentation for common hook use cases
 - Hook execution metrics in logs
+
+## Session: Gemini CLI Research Spike (curb-4wz)
+
+### Task: Spike: Research Gemini CLI interface
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was researched:
+1. **Gemini CLI Installation**
+   - Available via NPM (`npm install -g @google/gemini-cli`)
+   - Available via Homebrew (`brew install gemini-cli`)
+   - Available via NPX (no installation): `npx @google/gemini-cli`
+   - Pre-installed in Google Cloud Shell
+   - Tested version: 0.1.9 (installed via homebrew)
+
+2. **Basic Invocation Pattern**
+   - Command structure: `echo "text" | gemini -p "prompt" [flags]`
+   - Working example: `echo "What is 2+2?" | gemini -p "Answer" -y`
+   - YOLO mode (`-y`) required for autonomous operation
+   - Default model: gemini-2.5-pro (changeable with `-m` flag)
+
+3. **Key Flags for Curb Integration**
+   - `-y` / `--yolo`: Auto-accept all actions (CRITICAL for curb automation)
+   - `-p` / `--prompt`: Provide prompt text (appended to stdin)
+   - `-m` / `--model`: Specify model (e.g., gemini-2.5-flash)
+   - `-d` / `--debug`: Enable debug mode
+   - `-s` / `--sandbox`: Run in sandbox environment
+   - `-a` / `--all_files`: Include all files in context
+   - `-c` / `--checkpointing`: Enable file edit checkpointing
+
+4. **System Prompt Handling**
+   - NO `--append-system-prompt` flag like Claude Code
+   - Must concatenate system + task prompts manually
+   - Alternative: Use GEMINI.md files for persistent context
+   - Recommended approach: Inline concatenation (matches Codex pattern)
+   - Pattern: `"$system_prompt\n\n---\n\n$task_prompt"`
+
+5. **Streaming Support**
+   - NOT available in v0.1.9 (tested via homebrew)
+   - Documentation mentions `--output-format stream-json` but flag not recognized
+   - Testing showed: `Unknown arguments: output-format, outputFormat`
+   - Conclusion: Use non-streaming mode initially
+   - May be available in newer versions or different installation methods
+
+6. **Token and Usage Reporting**
+   - NO token reporting in stdout for scripted invocations
+   - `/stats` command available in interactive mode only
+   - Cannot extract usage from automated command-line usage
+   - Testing confirmed: No "Usage", "Token", "Cost", or "Statistics" in output
+   - **Critical limitation**: Cannot track budget accurately without API integration
+   - Workarounds:
+     - Return 0 for tokens_used initially
+     - Estimate based on input/output length
+     - Use Gemini API SDK directly for accurate tracking
+     - Parse session files if Gemini CLI creates them
+
+### Key Differences from Claude/Codex:
+
+1. **Interactive-First Design**
+   - Gemini CLI optimized for interactive terminal sessions
+   - Requires explicit `-y` flag for autonomous operation
+   - Claude Code: `--dangerously-skip-permissions` (similar concept)
+   - Codex: `--full-auto` flag
+
+2. **No Direct System Prompt Flag**
+   - Must concatenate prompts or use GEMINI.md files
+   - Claude Code: `--append-system-prompt "..."`
+   - Codex: Also requires concatenation
+   - Pattern matches Codex more than Claude
+
+3. **File Context Scanning**
+   - Scans working directory by default
+   - Prints warnings for inaccessible directories (can be noisy in /tmp)
+   - `-a` flag includes ALL files (potentially expensive)
+   - Claude Code: More controlled file access
+
+4. **Built-in Tools**
+   - grep, terminal, file read/write integrated
+   - Web search and web fetch capabilities
+   - MCP (Model Context Protocol) support for custom integrations
+   - More comprehensive than Claude Code's tool system
+
+5. **Checkpointing Feature**
+   - `-c` flag enables checkpointing of file edits
+   - Could be useful for state management
+   - Unique feature not in Claude/Codex
+
+### Implementation Strategy for curb-3s0:
+
+**Minimum Viable Implementation:**
+```bash
+gemini_invoke() {
+    local system_prompt="$1"
+    local task_prompt="$2"
+    local debug="${3:-false}"
+
+    # Combine prompts (no --append-system-prompt available)
+    local combined_prompt="${system_prompt}
+
+---
+
+${task_prompt}"
+
+    local flags="-y"  # YOLO mode required
+    [[ "$debug" == "true" ]] && flags="$flags -d"
+    [[ -n "${CURB_MODEL:-}" ]] && flags="$flags -m $CURB_MODEL"
+
+    # Invoke with combined prompt
+    echo "" | gemini -p "$combined_prompt" $flags
+}
+```
+
+**Challenges to Address:**
+1. No token reporting → Return 0 initially, document limitation
+2. Directory warnings → May need stderr filtering
+3. No streaming → Use non-streaming mode
+4. System prompt → Concatenate manually (like Codex)
+
+**Future Enhancements:**
+1. Test newer versions for `--output-format stream-json`
+2. Investigate GEMINI.md for persistent system prompts
+3. Explore MCP integration for custom tools
+4. Consider Gemini API SDK for accurate usage tracking
+5. Test checkpointing feature for state management
+
+### Learnings:
+
+- **Spike methodology**: Research first, implement later prevents wasted effort
+  - Identified critical limitation (no token reporting) before implementation
+  - Discovered YOLO mode requirement early
+  - Documented differences from existing harnesses
+  - Clear path forward for implementation task
+
+- **CLI tool evaluation criteria**:
+  - Basic invocation pattern (stdin/stdout behavior)
+  - Auto-accept/autonomous mode availability
+  - System prompt injection mechanism
+  - Streaming capabilities and output formats
+  - Usage/token reporting in stdout
+  - Comparison with existing tools in same category
+
+- **Version-specific behavior**: Homebrew v0.1.9 differs from documentation
+  - Documented `--output-format` flag not available in tested version
+  - May indicate rapid development or installation method differences
+  - Important to test actual installed version, not just read docs
+  - Document version numbers in spike findings
+
+- **Workaround planning**: When features missing, document alternatives
+  - Token reporting: Return 0, consider API integration, estimate from length
+  - Streaming: Use non-streaming initially, check future versions
+  - System prompt: Concatenate manually, explore GEMINI.md alternative
+  - Multiple paths forward reduces risk of implementation blockers
+
+- **Pattern matching**: Gemini CLI closer to Codex than Claude Code
+  - Both require prompt concatenation (no system prompt flag)
+  - Both have auto-accept flags for autonomous operation
+  - Implementation can follow Codex pattern more closely
+  - Existing harness code provides good template
+
+### Files Created:
+- `.chopshop/spikes/gemini.md` (comprehensive research documentation)
+
+### Acceptance Criteria Met:
+✓ Installation method documented (Homebrew, NPM, NPX)
+✓ Basic invocation working (`echo | gemini -p "..." -y`)
+✓ Flags mapped to curb needs (-y, -m, -d, -p)
+✓ Token reporting capability assessed (NOT available - critical limitation)
+✓ Findings written to .chopshop/spikes/gemini.md
+
+### Next Steps:
+Ready to proceed with curb-3s0 (Implement Gemini harness):
+1. Follow Codex harness pattern (prompt concatenation)
+2. Use `-y` flag for autonomous operation
+3. Return 0 for token usage (document limitation in code)
+4. Non-streaming mode only
+5. Add TODO comments for future streaming/API integration
+6. Consider directory warning filtering for cleaner output
+
+### References:
+- [Gemini CLI GitHub](https://github.com/google-gemini/gemini-cli)
+- [Gemini CLI Documentation](https://geminicli.com/docs/)
+- [Google Developers: Gemini CLI](https://developers.google.com/gemini-code-assist/docs/gemini-cli)
+- [Google Blog: Introducing Gemini CLI](https://blog.google/technology/developers/introducing-gemini-cli-open-source-ai-agent/)
