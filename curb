@@ -147,9 +147,13 @@ check_deps() {
 validate_project() {
     log_debug "Validating project structure in ${PROJECT_DIR}"
 
-    # Detect task backend
+    # Detect and initialize task backend
+    # Note: tasks.sh is already sourced at top of script, defining _TASK_BACKEND global
+    # detect_backend echoes the result AND sets _TASK_BACKEND, but command substitution
+    # runs in subshell, so we explicitly set the global after getting the value
     local detected_backend
     detected_backend=$(detect_backend "${PROJECT_DIR}")
+    _TASK_BACKEND="$detected_backend"  # Explicitly set global to persist across function calls
     log_debug "Task backend: ${detected_backend}"
 
     if [[ "$detected_backend" == "beads" ]]; then
@@ -182,7 +186,7 @@ validate_project() {
 # Show task status summary
 show_status() {
     local prd="${PROJECT_DIR}/prd.json"
-    local backend=$(get_backend)
+    local backend=$(get_backend "${PROJECT_DIR}")
 
     # Validate JSON before processing (only for json backend)
     if [[ "$backend" == "json" ]]; then
@@ -224,7 +228,7 @@ show_status() {
 # Show ready tasks
 show_ready() {
     local prd="${PROJECT_DIR}/prd.json"
-    local backend=$(get_backend)
+    local backend=$(get_backend "${PROJECT_DIR}")
 
     # Validate JSON before processing (only for json backend)
     if [[ "$backend" == "json" ]]; then
@@ -296,17 +300,53 @@ run_iteration() {
     local prd="${PROJECT_DIR}/prd.json"
     log_debug "Starting iteration"
 
+    # Initialize session if not already initialized
+    if ! session_is_initialized; then
+        log_debug "Initializing session..."
+        if [[ -n "$SESSION_NAME" ]]; then
+            session_init --name "$SESSION_NAME"
+        else
+            session_init
+        fi
+
+        if [[ $? -ne 0 ]]; then
+            log_warn "Failed to initialize session"
+        else
+            local session_name
+            session_name=$(session_get_name)
+            local session_id
+            session_id=$(session_get_id)
+            log_debug "Session: ${session_name} (${session_id})"
+        fi
+    fi
+
     # Initialize logger if not already initialized
     if [[ -z "$(logger_get_file)" ]]; then
         local project_name
         project_name=$(basename "$PROJECT_DIR")
         local session_id
-        session_id=$(date +"%Y%m%d-%H%M%S")
+        session_id=$(session_get_id)
 
         if logger_init "$project_name" "$session_id"; then
             log_debug "Logger initialized: $(logger_get_file)"
         else
             log_warn "Failed to initialize logger"
+        fi
+    fi
+
+    # Initialize artifacts for this run if not already initialized
+    if session_is_initialized; then
+        local run_dir
+        run_dir=$(artifacts_get_run_dir 2>/dev/null)
+        if [[ -n "$run_dir" ]] && [[ ! -f "${run_dir}/run.json" ]]; then
+            log_debug "Initializing artifacts..."
+            if artifacts_init_run; then
+                local artifacts_path
+                artifacts_path=$(artifacts_get_run_dir)
+                log_debug "Artifacts initialized: ${artifacts_path}"
+            else
+                log_warn "Failed to initialize artifacts"
+            fi
         fi
     fi
 
@@ -338,6 +378,7 @@ run_iteration() {
     if [[ -z "$current_task" || "$current_task" == "null" ]]; then
         # Find next ready task
         log_debug "No in-progress tasks, finding ready tasks..."
+        log_debug "Current _TASK_BACKEND: ${_TASK_BACKEND}"
         local ready_tasks
         ready_tasks=$(get_ready_tasks "$prd" "$EPIC" "$LABEL")
         log_debug "Ready tasks result: ${ready_tasks:0:200}..."

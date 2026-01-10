@@ -11,6 +11,12 @@
 #   - Auto-detect: uses beads if available and initialized, else json
 #
 
+# Include guard to prevent re-sourcing and resetting _TASK_BACKEND
+if [[ -n "${_TASKS_SH_LOADED:-}" ]]; then
+    return 0
+fi
+_TASKS_SH_LOADED=1
+
 CURB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source beads wrapper if available
@@ -67,9 +73,11 @@ detect_backend() {
 }
 
 # Get the current backend
+# Optional parameter: project_dir (defaults to current directory)
 get_backend() {
+    local project_dir="${1:-.}"
     if [[ -z "$_TASK_BACKEND" ]]; then
-        detect_backend >/dev/null
+        detect_backend "$project_dir" >/dev/null
     fi
     echo "$_TASK_BACKEND"
 }
@@ -116,7 +124,12 @@ get_ready_tasks() {
     local epic="${2:-}"   # Optional epic/parent filter
     local label="${3:-}"  # Optional label filter
 
-    if [[ "$(get_backend)" == "beads" ]]; then
+    local backend=$(get_backend)
+    if [[ "${DEBUG:-}" == "true" ]]; then
+        echo "[DEBUG get_ready_tasks] backend=$backend prd=$prd _TASK_BACKEND=$_TASK_BACKEND" >&2
+    fi
+
+    if [[ "$backend" == "beads" ]]; then
         beads_get_ready_tasks "$epic" "$label"
     else
         json_get_ready_tasks "$prd" "$epic" "$label"
@@ -262,7 +275,12 @@ json_get_ready_tasks() {
     local epic="${2:-}"
     local label="${3:-}"
 
-    jq --arg epic "$epic" --arg label "$label" '
+    if [[ "${DEBUG:-}" == "true" ]]; then
+        echo "[DEBUG json_get_ready_tasks] prd=$prd epic=$epic label=$label" >&2
+    fi
+
+    local result
+    result=$(jq --arg epic "$epic" --arg label "$label" '
         # Build a set of closed task IDs
         (.tasks | map(select(.status == "closed") | .id)) as $closed |
 
@@ -280,7 +298,13 @@ json_get_ready_tasks() {
         ]
         # Sort by priority (P0 < P1 < P2 < P3 < P4)
         | sort_by(.priority)
-    ' "$prd"
+    ' "$prd" 2>&1)
+
+    if [[ "${DEBUG:-}" == "true" ]]; then
+        echo "[DEBUG json_get_ready_tasks] result=${result:0:200}" >&2
+    fi
+
+    echo "$result"
 }
 
 # Get a specific task by ID from prd.json
