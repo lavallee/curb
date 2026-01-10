@@ -22,6 +22,8 @@ PROJECT_DIR="${CURB_PROJECT_DIR:-$(pwd)}"
 source "${CURB_DIR}/lib/tasks.sh"
 # Source harness abstraction layer
 source "${CURB_DIR}/lib/harness.sh"
+# Source XDG directory helpers
+source "${CURB_DIR}/lib/xdg.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -45,6 +47,10 @@ HARNESS="${HARNESS:-auto}"
 # Model (set via --model flag or CURB_MODEL env)
 # Values: "opus", "sonnet", "haiku" (only applies to claude harness)
 MODEL="${CURB_MODEL:-}"
+# Epic filter (set via --epic flag or CURB_EPIC env)
+EPIC="${CURB_EPIC:-}"
+# Label filter (set via --label flag or CURB_LABEL env)
+LABEL="${CURB_LABEL:-}"
 
 log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
@@ -161,19 +167,28 @@ show_status() {
 # Show ready tasks
 show_ready() {
     local prd="${PROJECT_DIR}/prd.json"
+    local backend=$(get_backend)
 
-    # Validate JSON before processing
-    if ! jq empty "$prd" 2>/dev/null; then
-        log_error "Invalid JSON in prd.json"
-        return 1
+    # Validate JSON before processing (only for json backend)
+    if [[ "$backend" == "json" ]]; then
+        if ! jq empty "$prd" 2>/dev/null; then
+            log_error "Invalid JSON in prd.json"
+            return 1
+        fi
     fi
 
     log_info "Ready Tasks (unblocked, status=open)"
+    if [[ -n "$EPIC" ]]; then
+        log_info "  Epic filter: $EPIC"
+    fi
+    if [[ -n "$LABEL" ]]; then
+        log_info "  Label filter: $LABEL"
+    fi
     echo "======================================"
 
-    local ready=$(get_ready_tasks "$prd")
+    local ready=$(get_ready_tasks "$prd" "$EPIC" "$LABEL")
 
-    if [[ -z "$ready" || "$ready" == "null" ]]; then
+    if [[ -z "$ready" || "$ready" == "null" || "$ready" == "[]" ]]; then
         log_warn "No ready tasks found"
         return
     fi
@@ -222,15 +237,15 @@ EOF
 # Run a single iteration
 run_iteration() {
     local prd="${PROJECT_DIR}/prd.json"
-    log_debug "Starting iteration, reading prd.json"
+    log_debug "Starting iteration"
 
     # Check for in-progress tasks first (resume interrupted work)
     local current_task
     log_debug "Checking for in-progress tasks..."
-    current_task=$(jq '[.tasks[] | select(.status == "in_progress")] | first' "$prd")
+    current_task=$(get_in_progress_task "$prd")
     log_debug "In-progress query result: ${current_task:0:100}..."
 
-    if [[ "$current_task" != "null" && -n "$current_task" ]]; then
+    if [[ -n "$current_task" && "$current_task" != "null" ]]; then
         local task_id=$(echo "$current_task" | jq -r '.id')
         local task_title=$(echo "$current_task" | jq -r '.title')
         local task_type=$(echo "$current_task" | jq -r '.type')
@@ -241,7 +256,7 @@ run_iteration() {
         # Find next ready task
         log_debug "No in-progress tasks, finding ready tasks..."
         local ready_tasks
-        ready_tasks=$(get_ready_tasks "$prd")
+        ready_tasks=$(get_ready_tasks "$prd" "$EPIC" "$LABEL")
         log_debug "Ready tasks result: ${ready_tasks:0:200}..."
 
         if [[ -z "$ready_tasks" || "$ready_tasks" == "[]" ]]; then
@@ -274,6 +289,17 @@ run_iteration() {
         log_debug "Task status updated"
     fi
 
+    # Check for model: label and set CURB_MODEL if harness is claude
+    local harness=$(harness_get)
+    if [[ "$harness" == "claude" ]]; then
+        local task_model
+        task_model=$(echo "$current_task" | jq -r '.labels // [] | .[] | select(startswith("model:")) | split(":")[1]' 2>/dev/null | head -1)
+        if [[ -n "$task_model" ]]; then
+            log_info "  Model from label: ${task_model}"
+            export CURB_MODEL="$task_model"
+        fi
+    fi
+
     # Generate prompts
     log_debug "Generating prompts..."
     local system_prompt
@@ -297,7 +323,6 @@ run_iteration() {
         echo ""
     fi
 
-    local harness=$(harness_get)
     log_info "Running ${harness}..."
     echo ""
 
@@ -510,6 +535,26 @@ main() {
             MODEL="$arg"
             export CURB_MODEL="$MODEL"
             _next_is_model=false
+        elif [[ "$arg" == "--epic="* ]]; then
+            EPIC="${arg#--epic=}"
+            export CURB_EPIC="$EPIC"
+        elif [[ "$arg" == "--epic" ]]; then
+            _next_is_epic=true
+            continue
+        elif [[ "${_next_is_epic:-}" == "true" ]]; then
+            EPIC="$arg"
+            export CURB_EPIC="$EPIC"
+            _next_is_epic=false
+        elif [[ "$arg" == "--label="* ]]; then
+            LABEL="${arg#--label=}"
+            export CURB_LABEL="$LABEL"
+        elif [[ "$arg" == "--label" ]]; then
+            _next_is_label=true
+            continue
+        elif [[ "${_next_is_label:-}" == "true" ]]; then
+            LABEL="$arg"
+            export CURB_LABEL="$LABEL"
+            _next_is_label=false
         else
             args+=("$arg")
         fi
@@ -517,6 +562,8 @@ main() {
     unset _next_is_backend
     unset _next_is_harness
     unset _next_is_model
+    unset _next_is_epic
+    unset _next_is_label
 
     check_deps
     log_debug "Dependencies checked: jq and harness found"
@@ -635,6 +682,8 @@ Usage:
   curb --backend X  Force task backend: "beads" or "json" (default: auto-detect)
   curb --harness X  Force harness: "claude" or "codex" (default: auto-detect)
   curb --model X    Set Claude model: "opus", "sonnet", or "haiku"
+  curb --epic <id>  Filter to tasks within a specific epic
+  curb --label <name> Filter to tasks with a specific label
 
 Flags:
   --debug, -d       Enable verbose debug output including:
@@ -658,6 +707,8 @@ Flags:
                     - opus: Claude Opus (most capable)
                     - sonnet: Claude Sonnet (balanced)
                     - haiku: Claude Haiku (fastest)
+  --epic <id>       Filter to tasks that are children of the specified epic
+  --label <name>    Filter to tasks with the specified label (e.g., "phase-1")
 
 Environment:
   CURB_PROJECT_DIR     Project directory (default: pwd)
@@ -666,6 +717,8 @@ Environment:
   CURB_BACKEND         Task backend: "auto", "beads", or "json"
   HARNESS              Harness: "auto", "claude", or "codex"
   CURB_MODEL           Claude model: "opus", "sonnet", or "haiku"
+  CURB_EPIC            Filter to tasks within this epic ID
+  CURB_LABEL           Filter to tasks with this label
   CLAUDE_FLAGS         Extra flags for Claude Code CLI
   CODEX_FLAGS          Extra flags for OpenAI Codex CLI
 
