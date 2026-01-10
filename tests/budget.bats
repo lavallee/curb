@@ -293,3 +293,82 @@ teardown() {
     budget_record 400000
     [ "$(budget_remaining)" -eq 600000 ]
 }
+
+# ========================================
+# budget_check_warning tests
+# ========================================
+
+@test "budget_check_warning returns 0 when budget not initialized" {
+    run budget_check_warning 80
+    [ "$status" -eq 0 ]
+}
+
+@test "budget_check_warning does nothing when under threshold" {
+    budget_init 1000000
+    budget_record 700000
+    run budget_check_warning 80
+    [ "$status" -eq 0 ]
+    # Warning file should not exist
+    [ ! -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+}
+
+@test "budget_check_warning sets flag when at threshold" {
+    budget_init 1000000
+    budget_record 800000
+    budget_check_warning 80
+    # Warning file should exist
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+}
+
+@test "budget_check_warning sets flag when over threshold" {
+    budget_init 1000000
+    budget_record 900000
+    budget_check_warning 80
+    # Warning file should exist
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+}
+
+@test "budget_check_warning only warns once" {
+    budget_init 1000000
+    budget_record 800000
+
+    # First call should set the warning
+    budget_check_warning 80
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+
+    # Second call should not reset it (idempotent)
+    budget_check_warning 80
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+}
+
+@test "budget_check_warning uses custom threshold" {
+    budget_init 1000000
+    budget_record 500000
+
+    # At 50% usage, should not warn at 80% threshold
+    budget_check_warning 80
+    [ ! -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+
+    # Clear and try with lower threshold
+    budget_clear
+    budget_init 1000000
+    budget_record 500000
+    budget_check_warning 40
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+}
+
+@test "ACCEPTANCE: budget_check_warning shows only once per run" {
+    budget_init 1000000
+    budget_record 800000
+
+    # First warning
+    budget_check_warning 80
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+
+    # Record more usage
+    budget_record 100000
+
+    # Second warning should not create new file (already warned)
+    budget_check_warning 80
+    [ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]
+}

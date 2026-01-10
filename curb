@@ -442,6 +442,18 @@ run_iteration() {
         budget_remaining=$(budget_remaining)
         budget_total=$(budget_get_limit)
         log_debug "Budget: ${budget_remaining} remaining of ${budget_total}"
+
+        # Check if warning threshold has been crossed
+        local warn_at
+        warn_at=$(config_get_or "budget.warn_at" "80")
+        budget_check_warning "$warn_at"
+
+        # Log warning if threshold crossed
+        if [[ -f "${TMPDIR:-/tmp}/curb_budget_warned_$$" ]]; then
+            local used=$(budget_get_used)
+            local percentage=$((used * 100 / budget_total))
+            log_warn "Budget warning: approaching limit (${percentage}% used, ${budget_remaining} tokens remaining)"
+        fi
     fi
 
     # Log task end with budget information

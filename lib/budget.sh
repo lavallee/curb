@@ -16,9 +16,10 @@
 # Using files instead of variables because bash command substitution creates subshells
 _BUDGET_LIMIT_FILE="${TMPDIR:-/tmp}/curb_budget_limit_$$"
 _BUDGET_USED_FILE="${TMPDIR:-/tmp}/curb_budget_used_$$"
+_BUDGET_WARNED_FILE="${TMPDIR:-/tmp}/curb_budget_warned_$$"
 
 # Clean up state files on exit
-trap 'rm -f "$_BUDGET_LIMIT_FILE" "$_BUDGET_USED_FILE" 2>/dev/null' EXIT
+trap 'rm -f "$_BUDGET_LIMIT_FILE" "$_BUDGET_USED_FILE" "$_BUDGET_WARNED_FILE" 2>/dev/null' EXIT
 
 # Initialize the budget limit for this run
 # Sets the maximum number of tokens allowed for this session.
@@ -179,6 +180,48 @@ budget_get_limit() {
     return 0
 }
 
+# Check if budget warning threshold has been crossed
+# Warns when usage exceeds warn_at threshold (default 80% of budget).
+# Warning is only shown once per run.
+#
+# Parameters:
+#   $1 - warn_at (optional): Percentage threshold (default 80)
+#
+# Returns:
+#   0 always (warning is logged, not an error condition)
+#
+# Example:
+#   budget_check_warning 80  # Warn at 80% of budget (default)
+budget_check_warning() {
+    local warn_at="${1:-80}"
+
+    # Check if budget was initialized
+    if [[ ! -f "$_BUDGET_LIMIT_FILE" ]]; then
+        return 0
+    fi
+
+    # Check if warning already shown
+    if [[ -f "$_BUDGET_WARNED_FILE" ]]; then
+        return 0
+    fi
+
+    # Read current state
+    local limit=$(cat "$_BUDGET_LIMIT_FILE")
+    local used=$(cat "$_BUDGET_USED_FILE" 2>/dev/null || echo "0")
+
+    # Calculate percentage used
+    local percentage=$((used * 100 / limit))
+
+    # Check if threshold crossed
+    if [[ "$percentage" -ge "$warn_at" ]]; then
+        # Mark that warning has been shown
+        echo "1" > "$_BUDGET_WARNED_FILE"
+        return 0
+    fi
+
+    return 0
+}
+
 # Clear budget state (for testing)
 # Resets budget limit and usage to zero.
 #
@@ -188,6 +231,6 @@ budget_get_limit() {
 # Example:
 #   budget_clear  # Reset for next test
 budget_clear() {
-    rm -f "$_BUDGET_LIMIT_FILE" "$_BUDGET_USED_FILE" 2>/dev/null
+    rm -f "$_BUDGET_LIMIT_FILE" "$_BUDGET_USED_FILE" "$_BUDGET_WARNED_FILE" 2>/dev/null
     return 0
 }
