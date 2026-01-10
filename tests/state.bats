@@ -344,6 +344,13 @@ EOF
 }
 
 @test "state_detect_test_command detects go test from go.mod" {
+    # Create mock go command if not available
+    if ! command -v go >/dev/null 2>&1; then
+        echo '#!/bin/bash' > "$MOCK_BIN_DIR/go"
+        echo 'echo "mock go"' >> "$MOCK_BIN_DIR/go"
+        chmod +x "$MOCK_BIN_DIR/go"
+    fi
+
     # Create go.mod
     echo 'module example.com/test' > go.mod
 
@@ -353,6 +360,13 @@ EOF
 }
 
 @test "state_detect_test_command detects cargo test from Cargo.toml" {
+    # Create mock cargo command if not available
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo '#!/bin/bash' > "$MOCK_BIN_DIR/cargo"
+        echo 'echo "mock cargo"' >> "$MOCK_BIN_DIR/cargo"
+        chmod +x "$MOCK_BIN_DIR/cargo"
+    fi
+
     # Create Cargo.toml
     cat > Cargo.toml <<EOF
 [package]

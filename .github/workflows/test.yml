@@ -16,11 +16,12 @@ jobs:
 
       - name: Install bats-core
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
+          git clone https://github.com/bats-core/bats-core.git
+          cd bats-core
+          sudo ./install.sh /usr/local
 
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Run tests
         run: bats tests/
