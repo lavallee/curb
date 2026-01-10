@@ -12,6 +12,9 @@
 #   artifacts_ensure_dirs(task_id) - Ensure directory structure exists
 #   artifacts_init_run() - Initialize run-level artifacts and create run.json
 #   artifacts_start_task(task_id, task_title, priority) - Start task and create task.json
+#   artifacts_capture_plan(task_id, plan_content) - Write plan.md for a task
+#   artifacts_capture_command(task_id, cmd, exit_code, output, duration) - Append to commands.jsonl
+#   artifacts_capture_diff(task_id) - Capture git diff to changes.patch
 #
 
 # Source dependencies
@@ -280,6 +283,227 @@ artifacts_start_task() {
     echo "$task_json" > "${task_dir}/task.json"
     if [[ $? -ne 0 ]]; then
         echo "ERROR: Failed to write task.json to ${task_dir}/task.json" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Capture the plan for a task
+# Writes plan content to plan.md in the task directory
+#
+# Args:
+#   $1 - task_id: The task identifier (e.g., "curb-123")
+#   $2 - plan_content: The plan content to write (markdown)
+#
+# Returns:
+#   0 on success, 1 on failure
+#
+# Example:
+#   artifacts_capture_plan "curb-123" "## Plan\n1. Step one\n2. Step two"
+artifacts_capture_plan() {
+    local task_id="$1"
+    local plan_content="$2"
+
+    # Validate required arguments
+    if [[ -z "$task_id" ]]; then
+        echo "ERROR: task_id is required" >&2
+        return 1
+    fi
+
+    if [[ -z "$plan_content" ]]; then
+        echo "ERROR: plan_content is required" >&2
+        return 1
+    fi
+
+    # Ensure task directory exists
+    artifacts_ensure_dirs "$task_id"
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Get task directory path
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "$task_id")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Write plan content to plan.md
+    echo "$plan_content" > "${task_dir}/plan.md"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to write plan.md to ${task_dir}/plan.md" >&2
+        return 1
+    fi
+
+    # Set file permissions to 600 (owner read/write only)
+    chmod 600 "${task_dir}/plan.md"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to set permissions on ${task_dir}/plan.md" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Capture a command execution
+# Appends command metadata to commands.jsonl in the task directory
+#
+# Args:
+#   $1 - task_id: The task identifier (e.g., "curb-123")
+#   $2 - cmd: The command that was executed
+#   $3 - exit_code: The exit code of the command
+#   $4 - output: The command output (optional, can be empty)
+#   $5 - duration: Duration in seconds (optional)
+#
+# Returns:
+#   0 on success, 1 on failure
+#
+# Example:
+#   artifacts_capture_command "curb-123" "npm test" "0" "All tests passed" "5.2"
+artifacts_capture_command() {
+    local task_id="$1"
+    local cmd="$2"
+    local exit_code="$3"
+    local output="$4"
+    local duration="${5:-0}"
+
+    # Validate required arguments
+    if [[ -z "$task_id" ]]; then
+        echo "ERROR: task_id is required" >&2
+        return 1
+    fi
+
+    if [[ -z "$cmd" ]]; then
+        echo "ERROR: cmd is required" >&2
+        return 1
+    fi
+
+    if [[ -z "$exit_code" ]]; then
+        echo "ERROR: exit_code is required" >&2
+        return 1
+    fi
+
+    # Ensure task directory exists
+    artifacts_ensure_dirs "$task_id"
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Get task directory path
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "$task_id")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Get current timestamp in ISO 8601 format
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Create command entry using jq (-c for compact/single-line output)
+    local command_json
+    command_json=$(jq -n -c \
+        --arg timestamp "$timestamp" \
+        --arg cmd "$cmd" \
+        --argjson exit_code "$exit_code" \
+        --arg output "$output" \
+        --argjson duration "$duration" \
+        '{
+            timestamp: $timestamp,
+            command: $cmd,
+            exit_code: $exit_code,
+            output: $output,
+            duration: $duration
+        }')
+
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to create command JSON" >&2
+        return 1
+    fi
+
+    # Append to commands.jsonl (create if doesn't exist)
+    local commands_file="${task_dir}/commands.jsonl"
+    echo "$command_json" >> "$commands_file"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to append to ${commands_file}" >&2
+        return 1
+    fi
+
+    # Set file permissions to 600 (owner read/write only)
+    chmod 600 "$commands_file"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to set permissions on ${commands_file}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Capture git diff for a task
+# Runs git diff HEAD to capture all uncommitted changes and writes to changes.patch
+# Handles case where HEAD doesn't exist (fresh repo) by using git diff
+#
+# Args:
+#   $1 - task_id: The task identifier (e.g., "curb-123")
+#
+# Returns:
+#   0 on success, 1 on failure
+#
+# Example:
+#   artifacts_capture_diff "curb-123"
+artifacts_capture_diff() {
+    local task_id="$1"
+
+    # Validate required arguments
+    if [[ -z "$task_id" ]]; then
+        echo "ERROR: task_id is required" >&2
+        return 1
+    fi
+
+    # Ensure task directory exists
+    artifacts_ensure_dirs "$task_id"
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Get task directory path
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "$task_id")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Try git diff HEAD first (captures staged + unstaged changes)
+    # If HEAD doesn't exist (fresh repo), fall back to git diff (unstaged only)
+    local diff_output
+    diff_output=$(git diff HEAD 2>/dev/null)
+    local git_exit_code=$?
+
+    # If HEAD doesn't exist, try without HEAD
+    if [[ $git_exit_code -ne 0 ]]; then
+        diff_output=$(git diff 2>&1)
+        git_exit_code=$?
+    fi
+
+    # If git still failed (not in a git repo, etc.), report error
+    if [[ $git_exit_code -ne 0 ]]; then
+        echo "ERROR: git diff failed: $diff_output" >&2
+        return 1
+    fi
+
+    # Write diff to changes.patch (even if empty)
+    local patch_file="${task_dir}/changes.patch"
+    echo "$diff_output" > "$patch_file"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to write changes.patch to ${patch_file}" >&2
+        return 1
+    fi
+
+    # Set file permissions to 600 (owner read/write only)
+    chmod 600 "$patch_file"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to set permissions on ${patch_file}" >&2
         return 1
     fi
 

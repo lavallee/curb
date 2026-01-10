@@ -210,3 +210,398 @@ teardown() {
     [ -f "${run_dir}/tasks/test-001/task.json" ]
     [ -f "${run_dir}/tasks/test-002/task.json" ]
 }
+
+@test "artifacts_capture_plan: fails without task_id" {
+    session_init --name "test-session"
+
+    run artifacts_capture_plan "" "# Plan content"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_capture_plan: fails without plan_content" {
+    session_init --name "test-session"
+
+    run artifacts_capture_plan "test-001" ""
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "plan_content is required" ]]
+}
+
+@test "artifacts_capture_plan: writes plan.md" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    local plan_content="# Implementation Plan\n\n1. Step one\n2. Step two"
+    run artifacts_capture_plan "test-001" "$plan_content"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    [ -f "${task_dir}/plan.md" ]
+}
+
+@test "artifacts_capture_plan: plan.md has correct content" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    local plan_content="# Implementation Plan
+
+1. Step one
+2. Step two"
+    artifacts_capture_plan "test-001" "$plan_content"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local plan_file="${task_dir}/plan.md"
+
+    # Verify content matches
+    local stored_content
+    stored_content=$(cat "$plan_file")
+    [ "$stored_content" = "$plan_content" ]
+}
+
+@test "artifacts_capture_plan: plan.md has 600 permissions" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_plan "test-001" "# Plan"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local plan_file="${task_dir}/plan.md"
+
+    # Check permissions (should be 600)
+    local perms
+    perms=$(stat -f "%Lp" "$plan_file" 2>/dev/null || stat -c "%a" "$plan_file" 2>/dev/null)
+    [ "$perms" = "600" ]
+}
+
+@test "artifacts_capture_plan: is idempotent (overwrites)" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_plan "test-001" "First plan"
+    artifacts_capture_plan "test-001" "Second plan"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local plan_file="${task_dir}/plan.md"
+
+    # Should contain only the second plan
+    local stored_content
+    stored_content=$(cat "$plan_file")
+    [ "$stored_content" = "Second plan" ]
+}
+
+@test "artifacts_capture_command: fails without task_id" {
+    session_init --name "test-session"
+
+    run artifacts_capture_command "" "npm test" "0" "output"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_capture_command: fails without cmd" {
+    session_init --name "test-session"
+
+    run artifacts_capture_command "test-001" "" "0" "output"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "cmd is required" ]]
+}
+
+@test "artifacts_capture_command: fails without exit_code" {
+    session_init --name "test-session"
+
+    run artifacts_capture_command "test-001" "npm test" "" "output"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "exit_code is required" ]]
+}
+
+@test "artifacts_capture_command: creates commands.jsonl" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_capture_command "test-001" "npm test" "0" "All tests passed" "5.2"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    [ -f "${task_dir}/commands.jsonl" ]
+}
+
+@test "artifacts_capture_command: appends valid JSONL" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_command "test-001" "npm test" "0" "All tests passed" "5.2"
+    artifacts_capture_command "test-001" "npm build" "1" "Build failed" "2.3"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local commands_file="${task_dir}/commands.jsonl"
+
+    # Should have 2 lines
+    local line_count
+    line_count=$(wc -l < "$commands_file" | tr -d ' ')
+    [ "$line_count" = "2" ]
+
+    # Each line should be valid JSON (JSONL - validate line by line)
+    while IFS= read -r line; do
+        echo "$line" | jq empty
+        [ $? -eq 0 ]
+    done < "$commands_file"
+}
+
+@test "artifacts_capture_command: includes timestamp" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_command "test-001" "npm test" "0" "output" "5.2"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local commands_file="${task_dir}/commands.jsonl"
+
+    # Check timestamp format
+    local timestamp
+    timestamp=$(jq -r '.timestamp' "$commands_file")
+    [[ "$timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+}
+
+@test "artifacts_capture_command: includes all fields" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_command "test-001" "npm test" "0" "All tests passed" "5.2"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local commands_file="${task_dir}/commands.jsonl"
+
+    # Check all fields exist
+    run jq -r '.command' "$commands_file"
+    [ "$status" -eq 0 ]
+    [ "$output" = "npm test" ]
+
+    run jq -r '.exit_code' "$commands_file"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+
+    run jq -r '.output' "$commands_file"
+    [ "$status" -eq 0 ]
+    [ "$output" = "All tests passed" ]
+
+    run jq -r '.duration' "$commands_file"
+    [ "$status" -eq 0 ]
+    [ "$output" = "5.2" ]
+}
+
+@test "artifacts_capture_command: handles empty output" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_capture_command "test-001" "npm test" "0" "" "5.2"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local commands_file="${task_dir}/commands.jsonl"
+
+    run jq -r '.output' "$commands_file"
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+}
+
+@test "artifacts_capture_command: defaults duration to 0" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_command "test-001" "npm test" "0" "output"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local commands_file="${task_dir}/commands.jsonl"
+
+    run jq -r '.duration' "$commands_file"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+}
+
+@test "artifacts_capture_command: commands.jsonl has 600 permissions" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_command "test-001" "npm test" "0" "output" "5.2"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local commands_file="${task_dir}/commands.jsonl"
+
+    # Check permissions (should be 600)
+    local perms
+    perms=$(stat -f "%Lp" "$commands_file" 2>/dev/null || stat -c "%a" "$commands_file" 2>/dev/null)
+    [ "$perms" = "600" ]
+}
+
+@test "artifacts_capture_diff: fails without task_id" {
+    session_init --name "test-session"
+
+    run artifacts_capture_diff ""
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_capture_diff: creates changes.patch" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_capture_diff "test-001"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    [ -f "${task_dir}/changes.patch" ]
+}
+
+@test "artifacts_capture_diff: captures git diff output" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    # Create a file and modify it
+    echo "original" > test_file.txt
+    git add test_file.txt
+    git commit -m "Add test file" >/dev/null 2>&1
+    echo "modified" > test_file.txt
+
+    artifacts_capture_diff "test-001"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local patch_file="${task_dir}/changes.patch"
+
+    # Should contain diff output
+    local patch_content
+    patch_content=$(cat "$patch_file")
+    [[ "$patch_content" =~ "test_file.txt" ]]
+    [[ "$patch_content" =~ "original" ]]
+    [[ "$patch_content" =~ "modified" ]]
+}
+
+@test "artifacts_capture_diff: handles empty diff gracefully" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    # No changes to capture
+    run artifacts_capture_diff "test-001"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local patch_file="${task_dir}/changes.patch"
+
+    # File should exist but be empty (or just a newline)
+    [ -f "$patch_file" ]
+    local file_size
+    file_size=$(wc -c < "$patch_file" | tr -d ' ')
+    # Empty diff results in 1 byte (newline from echo)
+    [ "$file_size" -le "1" ]
+}
+
+@test "artifacts_capture_diff: changes.patch has 600 permissions" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_capture_diff "test-001"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local patch_file="${task_dir}/changes.patch"
+
+    # Check permissions (should be 600)
+    local perms
+    perms=$(stat -f "%Lp" "$patch_file" 2>/dev/null || stat -c "%a" "$patch_file" 2>/dev/null)
+    [ "$perms" = "600" ]
+}
+
+@test "artifacts_capture_diff: is idempotent (overwrites)" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    # First capture
+    artifacts_capture_diff "test-001"
+
+    # Make a change
+    echo "new file" > new_test.txt
+
+    # Second capture should overwrite
+    artifacts_capture_diff "test-001"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local patch_file="${task_dir}/changes.patch"
+
+    # Should contain the new file
+    local patch_content
+    patch_content=$(cat "$patch_file")
+    [[ "$patch_content" =~ "new_test.txt" ]]
+}
+
+@test "artifacts integration: capture all artifact types" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "capture-test"
+    artifacts_init_run
+    artifacts_start_task "test-001" "Integration test"
+
+    # Capture plan
+    artifacts_capture_plan "test-001" "# Plan\n1. Do something"
+
+    # Capture commands
+    artifacts_capture_command "test-001" "npm test" "0" "Success" "5.2"
+    artifacts_capture_command "test-001" "npm build" "1" "Failed" "2.3"
+
+    # Capture diff
+    artifacts_capture_diff "test-001"
+
+    # Verify all files exist
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "capture-test-*" | head -1)/tasks/test-001
+
+    [ -f "${task_dir}/task.json" ]
+    [ -f "${task_dir}/plan.md" ]
+    [ -f "${task_dir}/commands.jsonl" ]
+    [ -f "${task_dir}/changes.patch" ]
+
+    # Verify commands has 2 entries
+    local line_count
+    line_count=$(wc -l < "${task_dir}/commands.jsonl" | tr -d ' ')
+    [ "$line_count" = "2" ]
+}
