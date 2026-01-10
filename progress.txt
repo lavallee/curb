@@ -88,3 +88,112 @@ The implementation was already present in the repository and working correctly. 
 1. Verifying the implementation against specifications
 2. Running comprehensive test suite
 3. Closing the task in beads system
+
+## Session 3: Environment Variable Override Support (curb-0u2)
+
+### Task: Add config file loading with global + project merge
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Enhanced `config_load()` in `lib/config.sh` to support environment variable overrides
+   - Added CURB_BUDGET environment variable support
+   - Environment variables now have highest precedence in config merging
+   - Used jq's `--argjson` to safely inject numeric values
+   - Handles missing budget structure gracefully (creates if needed)
+
+2. Added comprehensive test coverage in `tests/config.bats`
+   - Test: CURB_BUDGET env var overrides config budget
+   - Test: CURB_BUDGET env var overrides project config budget
+   - Test: CURB_BUDGET env var creates budget structure if not present
+   - Test: Config without CURB_BUDGET env var uses file values
+
+### Test Results:
+- All 4 new environment variable tests PASS
+- All 139 existing tests continue to PASS
+- Total: 143 tests passing
+
+### Learnings:
+- **Config precedence hierarchy**: CLI flags > env vars > project config > global config
+  - Config module handles: env vars > project > global
+  - Main script (`curb`) handles CLI flags
+- **jq numeric handling**: Use `--argjson` instead of `--arg` for numeric values
+  - `--arg` treats everything as strings (would quote the number)
+  - `--argjson` parses the value as JSON (numbers stay numeric)
+- **Graceful structure creation**: When env var sets a nested value, use jq to create structure if missing
+  - First try: `.budget.default = $budget` (updates existing)
+  - Fallback: `. + {budget: {default: $budget}}` (creates structure)
+- **Environment variable naming**: Follow existing CURB_* convention
+  - Consistent with CURB_BACKEND, CURB_DEBUG, CURB_MODEL, etc.
+  - Makes it easy to discover available env vars
+
+### Implementation Details:
+- Updated config precedence from "project > user" to "env vars > project > user"
+- CURB_BUDGET is the first env var override implemented
+- Pattern is extensible for other env vars (CURB_HARNESS, CURB_MAX_ITERATIONS, etc.)
+- All acceptance criteria met:
+  ✓ Global config alone works
+  ✓ Project config overrides global values
+  ✓ Missing config files handled gracefully (empty default)
+  ✓ CURB_BUDGET env var overrides config budget
+
+## Session 4: Logger Implementation (curb-et7)
+
+### Task: Implement logger.sh with JSONL output
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Created `lib/logger.sh` with full JSONL logging functionality
+   - `logger_init(project_name, session_id)` - Initialize log file at ~/.local/share/curb/logs/{project}/{session}.jsonl
+   - `logger_write(event_type, data_json)` - Append structured log entries
+   - `logger_get_file()` - Get current log file path
+   - `logger_clear()` - Clear logger state for testing
+
+2. Created comprehensive test suite in `tests/logger.bats`
+   - 24 tests covering all logger functions
+   - Tests for initialization, writing, error handling, and edge cases
+   - Acceptance criteria tests for JSONL format, ISO 8601 timestamps, and append-only behavior
+
+### Test Results:
+- All 24 new logger tests PASS
+- All 143 existing tests continue to PASS
+- Total: 167 tests passing
+
+### Learnings:
+- **Bash 3.2 parameter default bug**: macOS ships with bash 3.2.57 (from 2007) which has a bug with `${2:-{}}` syntax
+  - When parameter contains curly braces, bash 3.2 incorrectly appends the closing `}` from the default value syntax
+  - Bug: `local data_json="${2:-{}}"` with argument `'{"key":"value"}'` results in `'{"key":"value"}}'` (extra `}`)
+  - Solution: Use explicit if-check instead: `if [[ -z "$data_json" ]]; then data_json="{}"; fi`
+  - This is a known macOS bash limitation due to GPL3 license avoidance
+
+- **jq JSON construction**: For building JSON from bash variables, pipe approach is more reliable than `--argjson`
+  - `echo "$json" | jq -c --arg key "$value" '{...}'` handles complex JSON better
+  - Validate JSON first with `jq -e '.'` before processing
+
+- **ISO 8601 timestamps**: Use `date -u +"%Y-%m-%dT%H:%M:%SZ"` for UTC timestamps in ISO 8601 format
+  - `-u` flag ensures UTC timezone
+  - Format yields: `2026-01-09T01:45:20Z`
+
+- **JSONL format**: JSON Lines format is ideal for structured logs
+  - One complete JSON object per line
+  - Grep-friendly and jq-queryable
+  - Easy to append and process incrementally
+
+- **XDG integration**: Logger uses `curb_logs_dir()` from xdg.sh for proper directory structure
+  - Maintains separation of concerns
+  - Easy to override in tests by redefining the function
+
+### Implementation Details:
+- Log files created at `$(curb_logs_dir)/{project}/{session}.jsonl`
+- Each log entry contains: `timestamp`, `event_type`, and `data` fields
+- Directory structure created automatically on logger_init
+- JSON validation ensures data_json parameter is valid before writing
+- Error messages go to stderr, normal operation is silent
+- Append-only writes preserve all previous entries
+
+### Acceptance Criteria Met:
+✓ Log file created at ~/.local/share/curb/logs/{project}/{session}.jsonl
+✓ Each line is valid JSON
+✓ Timestamps in ISO 8601 format
+✓ Log file is append-only
