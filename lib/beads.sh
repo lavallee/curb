@@ -34,10 +34,31 @@ beads_init() {
     fi
 }
 
+# Check if a task is ready (unblocked)
+# Returns 0 if ready, 1 if blocked
+beads_is_task_ready() {
+    local task_id="$1"
+
+    # bd ready returns unblocked tasks - check if this task is in the list
+    bd ready --json 2>/dev/null | jq -e --arg id "$task_id" 'any(.[]; .id == $id)' >/dev/null 2>&1
+}
+
 # Get in-progress task (if any)
 # Returns single task JSON or empty
+# Optional filters: epic (parent ID), label (label name)
 beads_get_in_progress_task() {
-    bd list --status in_progress --limit 1 --json 2>/dev/null | jq '.[0] // empty | {
+    local epic="${1:-}"
+    local label="${2:-}"
+    local flags="--status in_progress --limit 1"
+
+    if [[ -n "$epic" ]]; then
+        flags="${flags} --parent ${epic}"
+    fi
+    if [[ -n "$label" ]]; then
+        flags="${flags} --label ${label}"
+    fi
+
+    bd list ${flags} --json 2>/dev/null | jq '.[0] // empty | {
         id: .id,
         title: .title,
         type: (.issue_type // .type // "task"),

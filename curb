@@ -24,6 +24,11 @@ source "${CURB_DIR}/lib/tasks.sh"
 source "${CURB_DIR}/lib/harness.sh"
 # Source XDG directory helpers
 source "${CURB_DIR}/lib/xdg.sh"
+# Source configuration management
+source "${CURB_DIR}/lib/config.sh"
+
+# Load configuration early
+config_load
 
 # Colors for output
 RED='\033[0;31m'
@@ -41,9 +46,10 @@ STREAM="${CURB_STREAM:-false}"
 # Backend mode (set via --backend flag or CURB_BACKEND env)
 # Values: "auto", "beads", "json"
 BACKEND="${CURB_BACKEND:-auto}"
-# Harness (set via --harness flag or HARNESS env)
+# Harness (set via --harness flag, HARNESS env, or config file)
 # Values: "auto", "claude", "codex"
-HARNESS="${HARNESS:-auto}"
+# Priority: CLI flag > env var > config file > default
+HARNESS="${HARNESS:-$(config_get_or "harness.default" "auto")}"
 # Model (set via --model flag or CURB_MODEL env)
 # Values: "opus", "sonnet", "haiku" (only applies to claude harness)
 MODEL="${CURB_MODEL:-}"
@@ -235,19 +241,31 @@ run_iteration() {
     log_debug "Starting iteration"
 
     # Check for in-progress tasks first (resume interrupted work)
+    # Respects --epic and --label filters
     local current_task
     log_debug "Checking for in-progress tasks..."
-    current_task=$(get_in_progress_task "$prd")
+    current_task=$(get_in_progress_task "$prd" "$EPIC" "$LABEL")
     log_debug "In-progress query result: ${current_task:0:100}..."
 
     if [[ -n "$current_task" && "$current_task" != "null" ]]; then
         local task_id=$(echo "$current_task" | jq -r '.id')
         local task_title=$(echo "$current_task" | jq -r '.title')
         local task_type=$(echo "$current_task" | jq -r '.type')
-        log_warn "Resuming in-progress task: ${task_id}"
-        log_info "  ${task_type}: ${task_title}"
-        log_debug "Task JSON: $current_task"
-    else
+
+        # Verify the in-progress task is not blocked
+        if is_task_ready "$prd" "$task_id"; then
+            log_warn "Resuming in-progress task: ${task_id}"
+            log_info "  ${task_type}: ${task_title}"
+            log_debug "Task JSON: $current_task"
+        else
+            log_warn "In-progress task ${task_id} is blocked, resetting to open"
+            update_task_status "$prd" "$task_id" "open"
+            current_task=""
+        fi
+    fi
+
+    # Find next ready task if no valid in-progress task
+    if [[ -z "$current_task" || "$current_task" == "null" ]]; then
         # Find next ready task
         log_debug "No in-progress tasks, finding ready tasks..."
         local ready_tasks
@@ -434,7 +452,7 @@ EOF
 
 # Main loop
 run_loop() {
-    local max_iterations="${CURB_MAX_ITERATIONS:-100}"
+    local max_iterations="${CURB_MAX_ITERATIONS:-$(config_get_or "loop.max_iterations" "100")}"
     local iteration=0
 
     log_info "Starting curb loop (max ${max_iterations} iterations)"

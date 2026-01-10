@@ -80,15 +80,31 @@ get_backend() {
 # ============================================================================
 #
 
-# Get in-progress task (if any)
-# Returns single task JSON or empty
-get_in_progress_task() {
+# Check if a task is ready (unblocked)
+# Returns 0 if ready, 1 if blocked
+is_task_ready() {
     local prd="$1"
+    local task_id="$2"
 
     if [[ "$(get_backend)" == "beads" ]]; then
-        beads_get_in_progress_task
+        beads_is_task_ready "$task_id"
     else
-        json_get_in_progress_task "$prd"
+        json_is_task_ready "$prd" "$task_id"
+    fi
+}
+
+# Get in-progress task (if any)
+# Returns single task JSON or empty
+# Optional filters: epic (parent ID), label (label name)
+get_in_progress_task() {
+    local prd="$1"
+    local epic="${2:-}"
+    local label="${3:-}"
+
+    if [[ "$(get_backend)" == "beads" ]]; then
+        beads_get_in_progress_task "$epic" "$label"
+    else
+        json_get_in_progress_task "$prd" "$epic" "$label"
     fi
 }
 
@@ -207,11 +223,36 @@ get_blocked_tasks() {
 # ============================================================================
 #
 
+# Check if a task is ready (unblocked) in prd.json
+# Returns 0 if ready, 1 if blocked
+json_is_task_ready() {
+    local prd="$1"
+    local task_id="$2"
+
+    # Check if task's dependencies are all closed
+    jq -e --arg id "$task_id" '
+        (.tasks | map(select(.status == "closed") | .id)) as $closed |
+        .tasks[]
+        | select(.id == $id)
+        | (.dependsOn // []) | all(. as $dep | $closed | contains([$dep]))
+    ' "$prd" >/dev/null 2>&1
+}
+
 # Get in-progress task from prd.json
+# Optional filters: epic (parent ID), label (label name)
 json_get_in_progress_task() {
     local prd="$1"
+    local epic="${2:-}"
+    local label="${3:-}"
 
-    jq '[.tasks[] | select(.status == "in_progress")] | first // empty' "$prd"
+    jq --arg epic "$epic" --arg label "$label" '
+        [
+            .tasks[]
+            | select(.status == "in_progress")
+            | if $epic != "" then select(.parent == $epic) else . end
+            | if $label != "" then select((.labels // []) | any(. == $label)) else . end
+        ] | first // empty
+    ' "$prd"
 }
 
 # Get all ready tasks from prd.json
