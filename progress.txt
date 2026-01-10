@@ -2006,3 +2006,260 @@ Ready to proceed with curb-3s0 (Implement Gemini harness):
 - [Gemini CLI Documentation](https://geminicli.com/docs/)
 - [Google Developers: Gemini CLI](https://developers.google.com/gemini-code-assist/docs/gemini-cli)
 - [Google Blog: Introducing Gemini CLI](https://blog.google/technology/developers/introducing-gemini-cli-open-source-ai-agent/)
+
+## Session: Gemini Harness Implementation (curb-3s0)
+
+### Task: Implement Gemini harness
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. **Created gemini_invoke() function** in lib/harness.sh
+   - Concatenates system and task prompts (no --append-system-prompt flag available)
+   - Uses -y (YOLO) flag for autonomous operation (required for automation)
+   - Supports CURB_MODEL environment variable for model selection
+   - Supports GEMINI_FLAGS for additional user flags
+   - Clears usage tracking and stores zero values (token reporting not available)
+   - Returns exit code from gemini CLI
+
+2. **Created gemini_invoke_streaming() function** in lib/harness.sh
+   - Fallback to non-streaming mode (--output-format not supported in v0.1.9)
+   - TODO comments added for future streaming support
+   - Matches pattern from codex_invoke_streaming
+
+3. **Updated harness_detect()** to include gemini
+   - Priority order: claude > codex > gemini
+   - Auto-detection checks for gemini CLI if claude/codex not found
+   - Gemini placed last in priority (less mature than claude/codex)
+
+4. **Updated harness_available()** to check for gemini
+   - Added gemini to the OR chain of availability checks
+   - Supports specific harness check: harness_available gemini
+
+5. **Updated harness_version()** to support gemini
+   - Added gemini case to switch statement
+   - Calls gemini --version with error handling
+
+6. **Updated harness_invoke()** to route to gemini
+   - Added gemini case to main routing function
+   - Follows same pattern as claude/codex cases
+
+7. **Updated harness_invoke_streaming()** to route to gemini
+   - Added gemini case for streaming invocation
+   - Delegates to gemini_invoke_streaming()
+
+### Test Results:
+- All 301 BATS tests continue to PASS
+- No regressions in existing functionality
+- Gemini harness ready for use
+
+### Learnings:
+
+- **Pattern matching accelerates implementation**: Following Codex pattern made implementation straightforward
+  - Codex also concatenates system+task prompts (no system prompt flag)
+  - Codex uses --full-auto, Gemini uses -y (YOLO)
+  - Both use non-streaming fallback for streaming mode
+  - Similar prompt construction pattern
+
+- **YOLO mode is critical**: Gemini CLI requires explicit -y flag
+  - Interactive by default (asks for confirmations)
+  - -y auto-accepts all actions
+  - Essential for autonomous curb operation
+  - Similar to Claude's --dangerously-skip-permissions and Codex's --full-auto
+
+- **Token reporting limitation is documented**: No token usage in stdout
+  - Gemini CLI v0.1.9 doesn't report tokens in command output
+  - /stats command only available in interactive mode
+  - Stored zero values to maintain API consistency
+  - TODO comments added for future API integration
+  - Budget tracking won't work accurately with Gemini until resolved
+
+- **Prompt concatenation strategy**: System prompt first, separator, then task
+  - Pattern: "${system_prompt}\n\n---\n\n${task_prompt}"
+  - Matches Codex implementation exactly
+  - Clear separator between system context and task
+  - Works reliably with echo "" | gemini -p "combined"
+
+- **Streaming support deferred**: Not available in current version
+  - Documentation mentions --output-format stream-json
+  - Testing confirmed flag not recognized in v0.1.9
+  - Implemented fallback: gemini_invoke_streaming calls gemini_invoke
+  - TODO added to test newer versions
+
+- **Environment variable naming consistency**: GEMINI_FLAGS follows pattern
+  - Claude: CLAUDE_FLAGS
+  - Codex: CODEX_FLAGS
+  - Gemini: GEMINI_FLAGS
+  - Allows users to pass extra flags per harness
+  - Maintains consistency across harnesses
+
+- **Harness priority matters**: Gemini placed last in auto-detection
+  - Claude is most mature (highest priority)
+  - Codex is established (middle priority)
+  - Gemini is newest (lowest priority)
+  - Users can override with HARNESS=gemini or --harness gemini
+  - Ensures stable default while allowing experimentation
+
+- **Function signature consistency**: All harness functions take same params
+  - gemini_invoke(system_prompt, task_prompt, debug)
+  - Matches claude_invoke and codex_invoke exactly
+  - Makes routing in harness_invoke() simple and consistent
+  - Easier to add new harnesses in future
+
+### Implementation Details:
+- File modified: lib/harness.sh (69 insertions, 4 deletions)
+- Functions added: gemini_invoke(), gemini_invoke_streaming()
+- Functions modified: harness_detect(), harness_available(), harness_version(), harness_invoke(), harness_invoke_streaming()
+- Lines of code: ~55 lines for gemini backend section
+- Comment density: High (explains limitations, TODOs, and patterns)
+
+### Acceptance Criteria Met:
+✓ curb --harness gemini works (routing implemented)
+✓ System and task prompts passed correctly (concatenation pattern)
+✓ Streaming mode if available (fallback to non-streaming)
+✓ Falls back gracefully if not installed (harness_available check)
+
+### Files Modified:
+- lib/harness.sh: Added Gemini backend with full integration
+- .beads/issues.jsonl: Task closed
+
+### Known Limitations:
+1. Token usage returns 0 (CLI doesn't report usage)
+2. Streaming not supported (v0.1.9 limitation)
+3. May print directory access warnings in /tmp
+
+### Future Enhancements:
+1. Test newer Gemini CLI versions for --output-format support
+2. Investigate Gemini API SDK for accurate token tracking
+3. Parse session files if Gemini CLI creates them
+4. Explore MCP integration for custom tools
+5. Consider checkpointing flag (-c) for state management
+6. Filter stderr to suppress directory warnings
+
+### Next Steps:
+Gemini harness is complete and ready for use. Users can:
+1. Install Gemini CLI via homebrew, npm, or npx
+2. Run curb --harness gemini to use it
+3. Set HARNESS=gemini or harness.default="gemini" in config
+4. Use CURB_MODEL to select model (gemini-2.5-flash, etc.)
+5. Add GEMINI_FLAGS for additional CLI options
+
+## Session: OpenCode CLI Research Spike (curb-d9l)
+
+### Task: Spike: Research OpenCode CLI interface
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was discovered:
+
+1. **OpenCode CLI Overview**
+   - Version tested: 1.0.220 (installed via homebrew)
+   - Open-source AI coding agent with TUI and CLI modes
+   - Command structure: `opencode run [message]` for automation
+   - GitHub: https://github.com/opencode-ai/opencode
+
+2. **Installation Methods**
+   - Install script: `curl -fsSL https://opencode.ai/install | bash`
+   - NPM: `npm i -g opencode-ai@latest`
+   - Homebrew: `brew install anomalyco/tap/opencode`
+   - Also: Scoop, Chocolatey, Arch (paru), mise, Nix
+
+3. **Auto Mode**
+   - `opencode run` command automatically approves all permissions
+   - No additional flags needed (unlike Claude's --dangerously-skip-permissions)
+   - Simpler than Gemini's -y flag or Codex's --full-auto
+
+4. **Token Reporting - EXCELLENT**
+   - Best-in-class usage tracking via `--format json`
+   - Real-time token reporting in `step_finish` events
+   - Includes: input, output, reasoning, cache.read, cache.write, cost_usd
+   - Separate stats command: `opencode stats` for analytics
+   - Session export: `opencode export <id>` for offline analysis
+
+5. **Streaming Support**
+   - Flag: `--format json` produces newline-delimited JSON events
+   - Event types: step_start, text, step_finish, content_block_start, etc.
+   - Similar to Claude Code's --output-format stream-json
+   - Full implementation available (not limited like Gemini v0.1.9)
+
+6. **System Prompt Support - FLEXIBLE**
+   - Multiple options:
+     a) AGENTS.md file (project or global in ~/.config/opencode/)
+     b) Agent JSON config in opencode.json with prompt field
+     c) Markdown agent files in .opencode/agent/
+     d) Simple concatenation (like Gemini/Codex)
+   - Most comprehensive configuration system among harnesses
+   - Can reference external files with {file:./path} syntax
+
+7. **Model Selection**
+   - Format: `provider/model` (e.g., `anthropic/claude-sonnet-4`)
+   - Different from Claude Code's short names
+   - Requires provider prefix (openai/, anthropic/, etc.)
+   - Implementation should auto-prepend anthropic/ if no / present
+
+8. **Agent System**
+   - Unique feature not in Claude/Codex/Gemini
+   - Built-in agents: build (primary), plan (primary), explore (subagent), general (subagent)
+   - Custom agents via opencode.json or .opencode/agent/ files
+   - Agent selection: `--agent <name>` flag
+
+9. **Session Management**
+   - Best session management among harnesses
+   - Commands: list, export, import, continue
+   - Flags: --continue, --session <id>, --share, --title
+   - Could enable conversation continuity in curb
+
+### Test Results:
+- All 301 existing tests continue to PASS
+- No code changes in this spike (research only)
+- Comprehensive documentation written to .chopshop/spikes/opencode.md
+
+### Learnings:
+
+1. **OpenCode vs Other Harnesses**:
+   - **Token Reporting**: OpenCode > Claude Code > Gemini/Codex (none)
+   - **System Prompts**: OpenCode (most flexible) > Claude Code (--append-system-prompt) > Gemini/Codex (concatenation)
+   - **Streaming**: OpenCode ≈ Claude Code > Gemini/Codex (limited/none)
+   - **Auto Mode**: OpenCode (default in run) > Others (need flags)
+   - **Session Mgmt**: OpenCode > Claude Code > Others (minimal)
+
+2. **JSON Event Format**:
+   - OpenCode uses nested structure: `.part.tokens.input`
+   - Claude uses flat structure: `.usage.input_tokens`
+   - OpenCode has separate `reasoning` tokens field (for o1-style models)
+   - OpenCode uses `cache.read` and `cache.write` instead of `cache_read_input_tokens` and `cache_creation_input_tokens`
+
+3. **Implementation Considerations**:
+   - Need to map OpenCode's field names to harness.sh conventions
+   - Model format requires provider prefix handling
+   - `opencode run` subcommand required (not direct invocation)
+   - Reasoning tokens currently not tracked in harness.sh
+   - System prompt: concatenation for MVP, AGENTS.md for production
+
+4. **Token Field Mapping**:
+   - OpenCode `tokens.input` → harness.sh `input_tokens`
+   - OpenCode `tokens.output` → harness.sh `output_tokens`
+   - OpenCode `tokens.cache.read` → harness.sh `cache_read_tokens`
+   - OpenCode `tokens.cache.write` → harness.sh `cache_creation_tokens`
+   - OpenCode `cost` → harness.sh `cost_usd`
+   - OpenCode `tokens.reasoning` → not tracked (future enhancement)
+
+5. **Best Practices from OpenCode**:
+   - Comprehensive configuration through multiple file types
+   - Structured JSON events with full metadata
+   - Separation of primary agents and subagents
+   - Project-specific vs global configuration precedence
+   - Built-in analytics and statistics commands
+
+### Dependencies & Next Tasks:
+- curb-d9l is now complete and unblocks:
+  - curb-lop: Implement OpenCode harness (ready to proceed)
+
+### Implementation Notes for curb-lop:
+1. Start with simple concatenation for system prompt (like Gemini/Codex)
+2. Use `opencode run --format json` for streaming
+3. Parse `step_finish` events for token extraction
+4. Handle provider/model format conversion
+5. Consider AGENTS.md setup command for advanced users
+6. Document reasoning token limitation in code comments
+7. Test with multiple providers (OpenAI, Anthropic, etc.)
