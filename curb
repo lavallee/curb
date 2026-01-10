@@ -11,6 +11,7 @@
 #   curb --status     # Show current task status
 #   curb --ready      # Show ready tasks
 #   curb --plan       # Run in planning mode (generate fix_plan.md)
+#   curb --budget 1000000  # Set token budget for run
 #   curb --debug      # Enable debug logging (can combine with other flags)
 #
 set -euo pipefail
@@ -28,6 +29,10 @@ source "${CURB_DIR}/lib/xdg.sh"
 source "${CURB_DIR}/lib/config.sh"
 # Source logger
 source "${CURB_DIR}/lib/logger.sh"
+# Source state verification
+source "${CURB_DIR}/lib/state.sh"
+# Source budget tracking
+source "${CURB_DIR}/lib/budget.sh"
 
 # Load configuration early
 config_load
@@ -59,6 +64,11 @@ MODEL="${CURB_MODEL:-}"
 EPIC="${CURB_EPIC:-}"
 # Label filter (set via --label flag or CURB_LABEL env)
 LABEL="${CURB_LABEL:-}"
+# Budget (set via --budget flag, CURB_BUDGET env, or config file)
+BUDGET="${CURB_BUDGET:-}"
+# Require clean state (set via --require-clean flag or config)
+# Empty means use config default, "true"/"false" overrides config
+REQUIRE_CLEAN="${CURB_REQUIRE_CLEAN:-}"
 
 log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
@@ -418,8 +428,42 @@ run_iteration() {
     log_debug "Duration: ${duration} seconds"
     log_debug "Exit code: ${exit_code}"
 
-    # Log task end (tokens_used defaulted to 0 since we don't have that info yet)
-    log_task_end "$task_id" "$exit_code" "$duration" 0
+    # Extract token usage from harness
+    local tokens_used=0
+    tokens_used=$(harness_get_total_tokens)
+    log_debug "Tokens used: ${tokens_used}"
+
+    # Record token usage in budget if budget is initialized
+    local budget_remaining=""
+    local budget_total=""
+    if [[ -f "${TMPDIR:-/tmp}/curb_budget_limit_$$" ]]; then
+        log_debug "Recording ${tokens_used} tokens to budget"
+        budget_record "$tokens_used"
+        budget_remaining=$(budget_remaining)
+        budget_total=$(budget_get_limit)
+        log_debug "Budget: ${budget_remaining} remaining of ${budget_total}"
+
+        # Check if warning threshold has been crossed
+        local warn_at
+        warn_at=$(config_get_or "budget.warn_at" "80")
+        if budget_check_warning "$warn_at"; then
+            : # No warning triggered
+        else
+            # Warning was just triggered - log it once
+            if [[ "$budget_total" -gt 0 ]]; then
+                local used=$(budget_get_used)
+                local percentage=$((used * 100 / budget_total))
+                log_warn "Budget warning: approaching limit (${percentage}% used, ${budget_remaining} tokens remaining)"
+            fi
+        fi
+    fi
+
+    # Log task end with budget information
+    if [[ -n "$budget_remaining" && -n "$budget_total" ]]; then
+        log_task_end "$task_id" "$exit_code" "$duration" "$tokens_used" "$budget_remaining" "$budget_total"
+    else
+        log_task_end "$task_id" "$exit_code" "$duration" "$tokens_used"
+    fi
 
     if [[ $exit_code -ne 0 ]]; then
         log_warn "Claude Code exited with code ${exit_code}"
@@ -428,6 +472,26 @@ run_iteration() {
         log_error "Harness exited with non-zero code" "{\"task_id\": \"$task_id\", \"exit_code\": $exit_code, \"harness\": \"$harness\"}"
     else
         log_debug "Claude Code completed successfully"
+
+        # Verify clean state after successful harness run
+        log_debug "Checking repository state..."
+        if ! state_ensure_clean "$REQUIRE_CLEAN"; then
+            log_warn "State check failed: uncommitted changes detected"
+            exit_code=1
+        else
+            log_debug "Repository state is clean"
+        fi
+
+        # Run tests if configured
+        if [[ $exit_code -eq 0 ]]; then
+            log_debug "Running tests if configured..."
+            if ! state_run_tests; then
+                log_warn "Test run failed"
+                exit_code=1
+            else
+                log_debug "Tests passed or not required"
+            fi
+        fi
     fi
 
     return $exit_code
@@ -529,6 +593,19 @@ run_loop() {
         log_debug "--- Iteration ${iteration} end: $(date) ---"
         echo ""
 
+        # Check budget after iteration if budget is initialized
+        if [[ -f "${TMPDIR:-/tmp}/curb_budget_limit_$$" ]]; then
+            if ! budget_check; then
+                local used=$(budget_get_used)
+                local limit=$(budget_get_limit)
+                echo ""
+                log_success "Budget exceeded (used ${used} of ${limit} tokens)"
+                log_info "Stopping gracefully due to budget limit"
+                show_status
+                return 0
+            fi
+        fi
+
         # Brief pause between iterations to allow for interruption
         log_debug "Sleeping 2 seconds before next iteration..."
         sleep 2
@@ -555,6 +632,14 @@ main() {
         elif [[ "$arg" == "--stream" ]]; then
             STREAM="true"
             log_info "Stream mode enabled - showing harness activity"
+        elif [[ "$arg" == "--require-clean" ]]; then
+            REQUIRE_CLEAN="true"
+            export CURB_REQUIRE_CLEAN="true"
+            log_info "Clean state enforcement enabled via CLI flag"
+        elif [[ "$arg" == "--no-require-clean" ]]; then
+            REQUIRE_CLEAN="false"
+            export CURB_REQUIRE_CLEAN="false"
+            log_info "Clean state enforcement disabled via CLI flag"
         elif [[ "$arg" == "--backend="* ]]; then
             BACKEND="${arg#--backend=}"
             export CURB_BACKEND="$BACKEND"
@@ -608,6 +693,17 @@ main() {
             LABEL="$arg"
             export CURB_LABEL="$LABEL"
             _next_is_label=false
+        elif [[ "$arg" == "--budget="* ]]; then
+            BUDGET="${arg#--budget=}"
+            export CURB_BUDGET="$BUDGET"
+        elif [[ "$arg" == "--budget" ]]; then
+            # Next arg is the budget value - handle in next iteration
+            _next_is_budget=true
+            continue
+        elif [[ "${_next_is_budget:-}" == "true" ]]; then
+            BUDGET="$arg"
+            export CURB_BUDGET="$BUDGET"
+            _next_is_budget=false
         else
             args+=("$arg")
         fi
@@ -617,9 +713,21 @@ main() {
     unset _next_is_model
     unset _next_is_epic
     unset _next_is_label
+    unset _next_is_budget
 
     check_deps
     log_debug "Dependencies checked: jq and harness found"
+
+    # Initialize budget if provided via CLI or environment
+    # Get budget from: CLI flag > environment > config file
+    local budget_limit="${BUDGET:-$(config_get_or "budget.limit" "")}"
+    if [[ -n "$budget_limit" ]]; then
+        if budget_init "$budget_limit"; then
+            log_info "Budget initialized: ${budget_limit} tokens"
+        else
+            log_warn "Failed to initialize budget with value: ${budget_limit}"
+        fi
+    fi
 
     case "${args[0]:-}" in
         --status|-s)
@@ -735,6 +843,7 @@ Usage:
   curb --backend X  Force task backend: "beads" or "json" (default: auto-detect)
   curb --harness X  Force harness: "claude" or "codex" (default: auto-detect)
   curb --model X    Set Claude model: "opus", "sonnet", or "haiku"
+  curb --budget X   Set token budget for this run
   curb --epic <id>  Filter to tasks within a specific epic
   curb --label <name> Filter to tasks with a specific label
 
@@ -762,12 +871,16 @@ Flags:
                     - haiku: Claude Haiku (fastest)
   --epic <id>       Filter to tasks that are children of the specified epic
   --label <name>    Filter to tasks with the specified label (e.g., "phase-1")
+  --budget <tokens> Set token budget limit (default from config or env)
+  --require-clean   Force clean state enforcement (overrides config)
+  --no-require-clean  Disable clean state enforcement (overrides config)
 
 Environment:
   CURB_PROJECT_DIR     Project directory (default: pwd)
   CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
   CURB_DEBUG           Enable debug mode (set to "true")
   CURB_BACKEND         Task backend: "auto", "beads", or "json"
+  CURB_BUDGET          Token budget limit for this run
   HARNESS              Harness: "auto", "claude", or "codex"
   CURB_MODEL           Claude model: "opus", "sonnet", or "haiku"
   CURB_EPIC            Filter to tasks within this epic ID
