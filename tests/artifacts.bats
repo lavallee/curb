@@ -14,6 +14,63 @@ teardown() {
     teardown_test_dir
 }
 
+@test "artifacts_get_run_dir: fails when session not initialized" {
+    run artifacts_get_run_dir
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Session not initialized" ]]
+}
+
+@test "artifacts_get_run_dir: returns correct path format" {
+    session_init --name "test-session"
+    run artifacts_get_run_dir
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^\.curb/runs/test-session-[0-9]{8}-[0-9]{6}$ ]]
+}
+
+@test "artifacts_get_task_dir: fails without task_id" {
+    session_init --name "test-session"
+    run artifacts_get_task_dir ""
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_get_task_dir: returns correct path format" {
+    session_init --name "test-session"
+    run artifacts_get_task_dir "test-001"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^\.curb/runs/test-session-.*/tasks/test-001$ ]]
+}
+
+@test "artifacts_ensure_dirs: fails without task_id" {
+    session_init --name "test-session"
+    run artifacts_ensure_dirs ""
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_ensure_dirs: creates task directory" {
+    session_init --name "test-session"
+    run artifacts_ensure_dirs "test-001"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "test-001")
+    [ -d "$task_dir" ]
+}
+
+@test "artifacts_ensure_dirs: creates directory with 700 permissions" {
+    session_init --name "test-session"
+    artifacts_ensure_dirs "test-001"
+
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "test-001")
+
+    # Check directory permissions (should be 700)
+    local perms
+    perms=$(stat -f "%Lp" "$task_dir" 2>/dev/null || stat -c "%a" "$task_dir" 2>/dev/null)
+    [ "$perms" = "700" ]
+}
+
 @test "artifacts_init_run: fails when session not initialized" {
     run artifacts_init_run
     [ "$status" -eq 1 ]
