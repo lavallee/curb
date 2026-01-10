@@ -11,6 +11,7 @@
 #   curb --status     # Show current task status
 #   curb --ready      # Show ready tasks
 #   curb --plan       # Run in planning mode (generate fix_plan.md)
+#   curb --budget 1000000  # Set token budget for run
 #   curb --debug      # Enable debug logging (can combine with other flags)
 #
 set -euo pipefail
@@ -30,6 +31,8 @@ source "${CURB_DIR}/lib/config.sh"
 source "${CURB_DIR}/lib/logger.sh"
 # Source state verification
 source "${CURB_DIR}/lib/state.sh"
+# Source budget tracking
+source "${CURB_DIR}/lib/budget.sh"
 
 # Load configuration early
 config_load
@@ -61,6 +64,8 @@ MODEL="${CURB_MODEL:-}"
 EPIC="${CURB_EPIC:-}"
 # Label filter (set via --label flag or CURB_LABEL env)
 LABEL="${CURB_LABEL:-}"
+# Budget (set via --budget flag, CURB_BUDGET env, or config file)
+BUDGET="${CURB_BUDGET:-}"
 # Require clean state (set via --require-clean flag or config)
 # Empty means use config default, "true"/"false" overrides config
 REQUIRE_CLEAN="${CURB_REQUIRE_CLEAN:-}"
@@ -641,6 +646,17 @@ main() {
             LABEL="$arg"
             export CURB_LABEL="$LABEL"
             _next_is_label=false
+        elif [[ "$arg" == "--budget="* ]]; then
+            BUDGET="${arg#--budget=}"
+            export CURB_BUDGET="$BUDGET"
+        elif [[ "$arg" == "--budget" ]]; then
+            # Next arg is the budget value - handle in next iteration
+            _next_is_budget=true
+            continue
+        elif [[ "${_next_is_budget:-}" == "true" ]]; then
+            BUDGET="$arg"
+            export CURB_BUDGET="$BUDGET"
+            _next_is_budget=false
         else
             args+=("$arg")
         fi
@@ -650,9 +666,21 @@ main() {
     unset _next_is_model
     unset _next_is_epic
     unset _next_is_label
+    unset _next_is_budget
 
     check_deps
     log_debug "Dependencies checked: jq and harness found"
+
+    # Initialize budget if provided via CLI or environment
+    # Get budget from: CLI flag > environment > config file
+    local budget_limit="${BUDGET:-$(config_get_or "budget.limit" "")}"
+    if [[ -n "$budget_limit" ]]; then
+        if budget_init "$budget_limit"; then
+            log_info "Budget initialized: ${budget_limit} tokens"
+        else
+            log_warn "Failed to initialize budget with value: ${budget_limit}"
+        fi
+    fi
 
     case "${args[0]:-}" in
         --status|-s)
@@ -768,6 +796,7 @@ Usage:
   curb --backend X  Force task backend: "beads" or "json" (default: auto-detect)
   curb --harness X  Force harness: "claude" or "codex" (default: auto-detect)
   curb --model X    Set Claude model: "opus", "sonnet", or "haiku"
+  curb --budget X   Set token budget for this run
   curb --epic <id>  Filter to tasks within a specific epic
   curb --label <name> Filter to tasks with a specific label
 
@@ -795,6 +824,7 @@ Flags:
                     - haiku: Claude Haiku (fastest)
   --epic <id>       Filter to tasks that are children of the specified epic
   --label <name>    Filter to tasks with the specified label (e.g., "phase-1")
+  --budget <tokens> Set token budget limit (default from config or env)
   --require-clean   Force clean state enforcement (overrides config)
   --no-require-clean  Disable clean state enforcement (overrides config)
 
@@ -803,6 +833,7 @@ Environment:
   CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
   CURB_DEBUG           Enable debug mode (set to "true")
   CURB_BACKEND         Task backend: "auto", "beads", or "json"
+  CURB_BUDGET          Token budget limit for this run
   HARNESS              Harness: "auto", "claude", or "codex"
   CURB_MODEL           Claude model: "opus", "sonnet", or "haiku"
   CURB_EPIC            Filter to tasks within this epic ID
