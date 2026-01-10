@@ -51,7 +51,7 @@ jobs:
           "$hook_dir/test.sh"
           echo "=== Running hooks.bats test 2 in isolation ==="
           cd "$GITHUB_WORKSPACE"
-          bats --filter "hooks_run executes script in global directory" tests/hooks.bats 2>&1 || echo "Test failed with exit code $?"
+          bats --trace --filter "hooks_run executes script in global directory" tests/hooks.bats 2>&1 || echo "Test failed with exit code $?"
 
       - name: Run tests
         run: bats tests/
