@@ -308,6 +308,120 @@ exit 0' "global"
     [ -z "$CURB_HARNESS" ]
 }
 
+# tests for hooks_find function
+
+# Test: hooks_find with no scripts returns empty
+@test "hooks_find with no scripts returns empty" {
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# Test: hooks_find finds scripts in global directory
+@test "hooks_find finds scripts in global directory" {
+    create_hook "pre-task" "01-test.sh" '#!/bin/bash
+exit 0' "global"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"01-test.sh"* ]]
+}
+
+# Test: hooks_find finds scripts in project directory
+@test "hooks_find finds scripts in project directory" {
+    create_hook "pre-task" "01-test.sh" '#!/bin/bash
+exit 0' "project"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"01-test.sh"* ]]
+}
+
+# Test: hooks_find returns scripts in sorted order
+@test "hooks_find returns scripts in sorted order" {
+    create_hook "pre-task" "03-third.sh" '#!/bin/bash
+exit 0' "global"
+
+    create_hook "pre-task" "01-first.sh" '#!/bin/bash
+exit 0' "global"
+
+    create_hook "pre-task" "02-second.sh" '#!/bin/bash
+exit 0' "global"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+
+    # Check order by looking at line positions
+    first_line=$(echo "$output" | grep -n "01-first.sh" | cut -d: -f1)
+    second_line=$(echo "$output" | grep -n "02-second.sh" | cut -d: -f1)
+    third_line=$(echo "$output" | grep -n "03-third.sh" | cut -d: -f1)
+
+    [ "$first_line" -lt "$second_line" ]
+    [ "$second_line" -lt "$third_line" ]
+}
+
+# Test: hooks_find only returns executable files
+@test "hooks_find only returns executable files" {
+    local hook_dir="$(curb_config_dir)/hooks/pre-task.d"
+    mkdir -p "$hook_dir"
+
+    # Create non-executable file
+    echo '#!/bin/bash
+exit 0' > "$hook_dir/01-not-executable.sh"
+    # Don't chmod +x
+
+    # Create executable file
+    create_hook "pre-task" "02-executable.sh" '#!/bin/bash
+exit 0' "global"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"01-not-executable.sh"* ]]
+    [[ "$output" == *"02-executable.sh"* ]]
+}
+
+# Test: hooks_find returns both global and project scripts
+@test "hooks_find returns both global and project scripts" {
+    create_hook "pre-task" "01-global.sh" '#!/bin/bash
+exit 0' "global"
+
+    create_hook "pre-task" "02-project.sh" '#!/bin/bash
+exit 0' "project"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"01-global.sh"* ]]
+    [[ "$output" == *"02-project.sh"* ]]
+}
+
+# Test: hooks_find merges global and project hooks in sorted order (global first)
+@test "hooks_find merges global and project hooks in sorted order (global first)" {
+    create_hook "pre-task" "02-global.sh" '#!/bin/bash
+exit 0' "global"
+
+    create_hook "pre-task" "01-project.sh" '#!/bin/bash
+exit 0' "project"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+
+    # Both should be present
+    [[ "$output" == *"02-global.sh"* ]]
+    [[ "$output" == *"01-project.sh"* ]]
+
+    # Global hooks should come first
+    global_line=$(echo "$output" | grep -n "02-global.sh" | cut -d: -f1)
+    project_line=$(echo "$output" | grep -n "01-project.sh" | cut -d: -f1)
+    [ "$global_line" -lt "$project_line" ]
+}
+
+# Test: hooks_find requires hook_name parameter
+@test "hooks_find requires hook_name parameter" {
+    run hooks_find ""
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"ERROR: hook_name is required"* ]]
+}
+
 # Acceptance Criteria Tests
 
 # Test: AC - hooks_run "pre-task" executes scripts in pre-task.d/
@@ -371,4 +485,66 @@ exit 0' "global"
     second_pos=$(echo "$output" | grep -n "SECOND" | cut -d: -f1)
 
     [ "$first_pos" -lt "$second_pos" ]
+}
+
+# Acceptance Criteria Tests for hooks_find
+
+# Test: AC - hooks_find finds hooks in global directory
+@test "AC: hooks_find finds hooks in global directory" {
+    create_hook "pre-task" "01-global.sh" '#!/bin/bash
+exit 0' "global"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"01-global.sh"* ]]
+}
+
+# Test: AC - hooks_find finds hooks in project directory
+@test "AC: hooks_find finds hooks in project directory" {
+    create_hook "pre-task" "01-project.sh" '#!/bin/bash
+exit 0' "project"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"01-project.sh"* ]]
+}
+
+# Test: AC - hooks_find merges both (global runs first)
+@test "AC: hooks_find merges both global and project (global first)" {
+    create_hook "pre-task" "01-global.sh" '#!/bin/bash
+exit 0' "global"
+
+    create_hook "pre-task" "02-project.sh" '#!/bin/bash
+exit 0' "project"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+
+    # Both should be present
+    [[ "$output" == *"01-global.sh"* ]]
+    [[ "$output" == *"02-project.sh"* ]]
+
+    # Global should come first
+    global_line=$(echo "$output" | grep -n "01-global.sh" | cut -d: -f1)
+    project_line=$(echo "$output" | grep -n "02-project.sh" | cut -d: -f1)
+    [ "$global_line" -lt "$project_line" ]
+}
+
+# Test: AC - hooks_find only returns executable files
+@test "AC: hooks_find only returns executable files" {
+    local hook_dir="$(curb_config_dir)/hooks/pre-task.d"
+    mkdir -p "$hook_dir"
+
+    # Create non-executable file
+    echo '#!/bin/bash
+exit 0' > "$hook_dir/01-not-executable.sh"
+
+    # Create executable file
+    create_hook "pre-task" "02-executable.sh" '#!/bin/bash
+exit 0' "global"
+
+    run hooks_find "pre-task"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"01-not-executable.sh"* ]]
+    [[ "$output" == *"02-executable.sh"* ]]
 }

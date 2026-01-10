@@ -36,6 +36,62 @@ if [[ -z "$(type -t config_get_or 2>/dev/null)" ]]; then
     source "${SCRIPT_DIR}/config.sh"
 fi
 
+# Find all hook scripts for a given hook name
+# Scans both global and project hook directories for executable scripts.
+# Returns paths sorted by filename (global hooks first, then project).
+#
+# Args:
+#   $1 - hook_name: Name of the hook (e.g., "pre-task", "post-task")
+#
+# Returns:
+#   0 on success
+#   1 if hook_name is empty
+#
+# Output:
+#   Prints one script path per line (newline-separated)
+#
+# Example:
+#   hooks_find "pre-task"
+#   # Output:
+#   # ~/.config/curb/hooks/pre-task.d/01-global.sh
+#   # ./.curb/hooks/pre-task.d/02-project.sh
+hooks_find() {
+    local hook_name="$1"
+
+    # Validate hook name
+    if [[ -z "$hook_name" ]]; then
+        echo "ERROR: hook_name is required" >&2
+        return 1
+    fi
+
+    # Build list of hook directories to check
+    local global_hook_dir="$(curb_config_dir)/hooks/${hook_name}.d"
+    local project_hook_dir="./.curb/hooks/${hook_name}.d"
+
+    local all_scripts=()
+
+    # Collect scripts from global directory
+    if [[ -d "$global_hook_dir" ]]; then
+        while IFS= read -r -d '' script; do
+            all_scripts+=("$script")
+        done < <(find "$global_hook_dir" -type f -perm +111 -print0 2>/dev/null | sort -z)
+    fi
+
+    # Collect scripts from project directory
+    if [[ -d "$project_hook_dir" ]]; then
+        while IFS= read -r -d '' script; do
+            all_scripts+=("$script")
+        done < <(find "$project_hook_dir" -type f -perm +111 -print0 2>/dev/null | sort -z)
+    fi
+
+    # Output each script on a separate line
+    for script in "${all_scripts[@]}"; do
+        echo "$script"
+    done
+
+    return 0
+}
+
 # Run all scripts in a hook directory
 # Executes scripts in sorted order from both global and project hook directories.
 # Scripts receive context via exported environment variables.
@@ -73,25 +129,11 @@ hooks_run() {
     export CURB_HOOK_NAME="$hook_name"
     export CURB_PROJECT_DIR="${CURB_PROJECT_DIR:-$(pwd)}"
 
-    # Build list of hook directories to check
-    local global_hook_dir="$(curb_config_dir)/hooks/${hook_name}.d"
-    local project_hook_dir="./.curb/hooks/${hook_name}.d"
-
+    # Find all hook scripts for this hook
     local all_scripts=()
-
-    # Collect scripts from global directory
-    if [[ -d "$global_hook_dir" ]]; then
-        while IFS= read -r -d '' script; do
-            all_scripts+=("$script")
-        done < <(find "$global_hook_dir" -type f -perm +111 -print0 2>/dev/null | sort -z)
-    fi
-
-    # Collect scripts from project directory
-    if [[ -d "$project_hook_dir" ]]; then
-        while IFS= read -r -d '' script; do
-            all_scripts+=("$script")
-        done < <(find "$project_hook_dir" -type f -perm +111 -print0 2>/dev/null | sort -z)
-    fi
+    while IFS= read -r script; do
+        all_scripts+=("$script")
+    done < <(hooks_find "$hook_name")
 
     # If no scripts found, return success
     if [[ ${#all_scripts[@]} -eq 0 ]]; then
