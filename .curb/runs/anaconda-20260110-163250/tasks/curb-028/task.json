@@ -1,0 +1,8 @@
+{
+  "task_id": "curb-028",
+  "title": "CHECKPOINT: Verify branch-per-run, commit-per-task workflow",
+  "priority": "P0",
+  "status": "in_progress",
+  "started_at": "2026-01-10T22:21:35Z",
+  "iterations": 0
+}
