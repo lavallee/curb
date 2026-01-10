@@ -110,7 +110,7 @@ harness_get_total_tokens() {
 # ============================================================================
 
 # Detect available harness
-# Priority: explicit HARNESS setting > claude > codex
+# Priority: explicit HARNESS setting > claude > codex > gemini
 harness_detect() {
     # If explicitly set, use that
     if [[ -n "${HARNESS:-}" && "$HARNESS" != "auto" ]]; then
@@ -119,11 +119,13 @@ harness_detect() {
         return 0
     fi
 
-    # Auto-detect: prefer claude, fallback to codex
+    # Auto-detect: prefer claude, fallback to codex, then gemini
     if command -v claude >/dev/null 2>&1; then
         _HARNESS="claude"
     elif command -v codex >/dev/null 2>&1; then
         _HARNESS="codex"
+    elif command -v gemini >/dev/null 2>&1; then
+        _HARNESS="gemini"
     else
         _HARNESS=""
     fi
@@ -150,7 +152,7 @@ harness_available() {
     fi
 
     # Check if any harness is available
-    command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1
+    command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v gemini >/dev/null 2>&1
 }
 
 # Get version of current harness
@@ -163,6 +165,9 @@ harness_version() {
             ;;
         codex)
             codex --version 2>&1 || echo "unknown"
+            ;;
+        gemini)
+            gemini --version 2>&1 || echo "unknown"
             ;;
         *)
             echo "no harness"
@@ -190,6 +195,9 @@ harness_invoke() {
         codex)
             codex_invoke "$system_prompt" "$task_prompt" "$debug"
             ;;
+        gemini)
+            gemini_invoke "$system_prompt" "$task_prompt" "$debug"
+            ;;
         *)
             echo "Error: No harness available" >&2
             return 1
@@ -212,6 +220,9 @@ harness_invoke_streaming() {
             ;;
         codex)
             codex_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
+            ;;
+        gemini)
+            gemini_invoke_streaming "$system_prompt" "$task_prompt" "$debug"
             ;;
         *)
             echo "Error: No harness available" >&2
@@ -398,4 +409,58 @@ codex_invoke_streaming() {
     # For now, streaming mode just runs the same as non-streaming and passes through output
     # TODO: Investigate codex proto command for structured streaming
     codex_invoke "$system_prompt" "$task_prompt" "$debug"
+}
+
+# ============================================================================
+# Gemini Backend
+# ============================================================================
+
+gemini_invoke() {
+    local system_prompt="$1"
+    local task_prompt="$2"
+    local debug="${3:-false}"
+
+    # Clear previous usage
+    harness_clear_usage
+
+    # Gemini CLI doesn't have --append-system-prompt, so we combine prompts
+    # The system prompt goes first, then a separator, then the task
+    local combined_prompt="${system_prompt}
+
+---
+
+${task_prompt}"
+
+    # YOLO mode (-y) is REQUIRED for autonomous operation (auto-accept all actions)
+    local flags="-y"
+    [[ "$debug" == "true" ]] && flags="$flags -d"
+
+    # Add model flag if specified (default: gemini-2.5-pro)
+    [[ -n "${CURB_MODEL:-}" ]] && flags="$flags -m $CURB_MODEL"
+
+    # Add any extra flags from environment
+    [[ -n "${GEMINI_FLAGS:-}" ]] && flags="$flags $GEMINI_FLAGS"
+
+    # Note: Gemini CLI v0.1.9 does NOT report token usage in stdout
+    # TODO: Parse session files or use Gemini API SDK for usage tracking
+    # For now, we cannot extract token usage, so it remains at 0
+    echo "" | gemini -p "$combined_prompt" $flags
+    local exit_code=$?
+
+    # Store zero usage (token reporting not available in CLI)
+    _harness_store_usage 0 0 0 0 ""
+
+    return $exit_code
+}
+
+gemini_invoke_streaming() {
+    local system_prompt="$1"
+    local task_prompt="$2"
+    local debug="${3:-false}"
+
+    # Gemini CLI v0.1.9 does NOT support --output-format stream-json
+    # The flag is documented but not recognized in the homebrew version
+    # TODO: Test newer versions for streaming support
+    # For now, streaming mode just runs the same as non-streaming
+    gemini_invoke "$system_prompt" "$task_prompt" "$debug"
 }
