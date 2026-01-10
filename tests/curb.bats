@@ -69,6 +69,65 @@ EOF
     [[ "$output" == *"Open"* ]] || [[ "$output" == *"Closed"* ]]
 }
 
+@test "curb status shows task summary (subcommand)" {
+    use_fixture "valid_prd.json" "prd.json"
+
+    # Mock the harness to avoid actual invocation
+    export PATH="$TEST_DIR:$PATH"
+    cat > claude << 'EOF'
+#!/bin/bash
+echo "Mocked harness"
+EOF
+    chmod +x claude
+
+    run "$PROJECT_ROOT/curb" status
+    [ "$status" -eq 0 ]
+    # Should show counts (with capital letters)
+    [[ "$output" == *"Open"* ]] || [[ "$output" == *"Closed"* ]]
+}
+
+@test "curb status --json outputs valid JSON" {
+    use_fixture "valid_prd.json" "prd.json"
+
+    # Mock the harness to avoid actual invocation
+    export PATH="$TEST_DIR:$PATH"
+    cat > claude << 'EOF'
+#!/bin/bash
+echo "Mocked harness"
+EOF
+    chmod +x claude
+
+    run "$PROJECT_ROOT/curb" status --json
+    [ "$status" -eq 0 ]
+    # Should be valid JSON
+    echo "$output" | jq empty
+    # Should have required fields
+    echo "$output" | jq -e '.task_counts'
+    echo "$output" | jq -e '.task_counts.total'
+    echo "$output" | jq -e '.task_counts.open'
+    echo "$output" | jq -e '.task_counts.closed'
+    echo "$output" | jq -e '.task_counts.in_progress'
+}
+
+@test "curb --status --json outputs valid JSON (legacy)" {
+    use_fixture "valid_prd.json" "prd.json"
+
+    # Mock the harness to avoid actual invocation
+    export PATH="$TEST_DIR:$PATH"
+    cat > claude << 'EOF'
+#!/bin/bash
+echo "Mocked harness"
+EOF
+    chmod +x claude
+
+    run "$PROJECT_ROOT/curb" --status --json
+    [ "$status" -eq 0 ]
+    # Should be valid JSON
+    echo "$output" | jq empty
+    # Should have required fields
+    echo "$output" | jq -e '.task_counts'
+}
+
 @test "curb --ready lists ready tasks" {
     use_fixture "valid_prd.json" "prd.json"
 

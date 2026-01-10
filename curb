@@ -501,8 +501,31 @@ cmd_run() {
 
 # Status subcommand - show task status
 cmd_status() {
-    validate_project
-    show_status
+    local json_output=false
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                json_output=true
+                shift
+                ;;
+            *)
+                _log_error_console "Unknown flag: $1"
+                _log_error_console "Usage: curb status [--json]"
+                return 1
+                ;;
+        esac
+    done
+
+    # In JSON mode, suppress logging during validation
+    if [[ "$json_output" == "true" ]]; then
+        validate_project >/dev/null 2>&1
+        show_status_json
+    else
+        validate_project
+        show_status
+    fi
 }
 
 # Explain subcommand - show details about a task or session
@@ -776,6 +799,100 @@ show_status() {
         printf "%0.s-" $(seq 1 $empty 2>/dev/null) || true
         printf "] %d%%\n" "$pct"
     fi
+
+    # Show current session if running
+    if session_is_initialized; then
+        local session_name
+        session_name=$(session_get_name 2>/dev/null || echo "unknown")
+        local session_id
+        session_id=$(session_get_id 2>/dev/null || echo "unknown")
+        echo ""
+        log_info "Current Session"
+        echo "===================="
+        echo "Name: ${session_name}"
+        echo "ID:   ${session_id}"
+    fi
+
+    # Show most recent run
+    local artifacts_base="${PROJECT_DIR}/.curb/runs"
+    if [[ -d "$artifacts_base" ]]; then
+        local most_recent_run
+        most_recent_run=$(ls -t "$artifacts_base" 2>/dev/null | head -n 1)
+        if [[ -n "$most_recent_run" ]]; then
+            echo ""
+            log_info "Most Recent Run"
+            echo "===================="
+            echo "Run ID: ${most_recent_run}"
+            if [[ -f "$artifacts_base/$most_recent_run/run.json" ]]; then
+                local started_at
+                started_at=$(jq -r '.started_at // "unknown"' "$artifacts_base/$most_recent_run/run.json" 2>/dev/null || echo "unknown")
+                local status
+                status=$(jq -r '.status // "unknown"' "$artifacts_base/$most_recent_run/run.json" 2>/dev/null || echo "unknown")
+                echo "Started: ${started_at}"
+                echo "Status:  ${status}"
+                echo "Path:    ${artifacts_base}/${most_recent_run}"
+            fi
+        fi
+    fi
+}
+
+# Show status in JSON format
+show_status_json() {
+    local prd="${PROJECT_DIR}/prd.json"
+    local backend=$(get_backend "${PROJECT_DIR}")
+
+    # Validate JSON before processing (only for json backend)
+    if [[ "$backend" == "json" ]]; then
+        if ! jq empty "$prd" 2>/dev/null; then
+            _log_error_console "Invalid JSON in prd.json"
+            return 1
+        fi
+    fi
+
+    local counts
+    counts=$(get_task_counts "$prd")
+
+    # Build JSON output
+    local session_name="null"
+    local session_id="null"
+    if session_is_initialized; then
+        session_name="\"$(session_get_name 2>/dev/null || echo "unknown")\""
+        session_id="\"$(session_get_id 2>/dev/null || echo "unknown")\""
+    fi
+
+    local most_recent_run="null"
+    local artifacts_base="${PROJECT_DIR}/.curb/runs"
+    if [[ -d "$artifacts_base" ]]; then
+        local run_dir
+        run_dir=$(ls -t "$artifacts_base" 2>/dev/null | head -n 1)
+        if [[ -n "$run_dir" ]]; then
+            local started_at="unknown"
+            local status="unknown"
+            local run_path="${artifacts_base}/${run_dir}"
+            if [[ -f "$run_path/run.json" ]]; then
+                started_at=$(jq -r '.started_at // "unknown"' "$run_path/run.json" 2>/dev/null || echo "unknown")
+                status=$(jq -r '.status // "unknown"' "$run_path/run.json" 2>/dev/null || echo "unknown")
+            fi
+            most_recent_run=$(jq -n \
+                --arg id "$run_dir" \
+                --arg started "$started_at" \
+                --arg status "$status" \
+                --arg path "$run_path" \
+                '{id: $id, started_at: $started, status: $status, path: $path}')
+        fi
+    fi
+
+    # Output JSON
+    jq -n \
+        --argjson counts "$counts" \
+        --argjson session_name "$session_name" \
+        --argjson session_id "$session_id" \
+        --argjson most_recent_run "$most_recent_run" \
+        '{
+            task_counts: $counts,
+            current_session: (if $session_name != null then {name: $session_name, id: $session_id} else null end),
+            most_recent_run: $most_recent_run
+        }'
 }
 
 # Show ready tasks
@@ -1426,7 +1543,7 @@ main() {
                 ;;
             status)
                 # Show task status
-                cmd_status
+                cmd_status "${args[@]:1}"
                 return $?
                 ;;
             explain)
@@ -1462,7 +1579,7 @@ main() {
     # Legacy flag parsing (for backwards compatibility)
     case "${args[0]:-}" in
         --status|-s)
-            cmd_status
+            cmd_status "${args[@]:1}"
             ;;
         --ready|-r)
             cmd_run --ready "${args[@]:1}"
@@ -1558,7 +1675,8 @@ Gemini, OpenCode) in a loop to complete tasks from a project backlog.
 QUICK START:
   curb              Run loop until all tasks complete
   curb --once       Run single iteration and exit
-  curb --status     Show current task status and progress
+  curb status       Show current task status and progress
+  curb status --json    Output status as JSON
   curb --ready      List tasks ready to be worked on
   curb --help       Show this help message
 
@@ -1629,7 +1747,10 @@ EXAMPLES:
   curb --ready
 
   # View current progress
-  curb --status
+  curb status
+
+  # Get status as JSON for scripting
+  curb status --json
 
 PROJECT FILES:
   .beads/           Beads task tracking (if using beads backend)

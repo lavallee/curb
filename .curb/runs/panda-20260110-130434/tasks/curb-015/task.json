@@ -1,0 +1,8 @@
+{
+  "task_id": "curb-015",
+  "title": "Implement cmd_status (migrate from --status flag)",
+  "priority": "P1",
+  "status": "in_progress",
+  "started_at": "2026-01-10T18:45:38Z",
+  "iterations": 0
+}
