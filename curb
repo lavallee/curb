@@ -32,6 +32,8 @@ source "${CURB_DIR}/lib/xdg.sh"
 source "${CURB_DIR}/lib/config.sh"
 # Source logger
 source "${CURB_DIR}/lib/logger.sh"
+# Source git operations
+source "${CURB_DIR}/lib/git.sh"
 # Source state verification
 source "${CURB_DIR}/lib/state.sh"
 # Source budget tracking
