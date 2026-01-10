@@ -3813,3 +3813,65 @@ Migrated --status flag to 'curb status' subcommand and added --json output optio
 - lib/state.sh: Higher-level state verification (wraps git.sh, adds config-based logic)
 - This separation enables future git workflow features while keeping state checks simple
 
+
+## Session: Git Run Branch Implementation (curb-022)
+
+### Task: Implement git_init_run_branch with naming convention
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. Enhanced `lib/git.sh` with run branch management
+   - `git_init_run_branch(session_name)` - Creates and checks out branch with naming convention curb/{session_name}/{YYYYMMDD-HHMMSS}
+   - `git_get_run_branch()` - Returns stored run branch name
+   - Global variable `_GIT_RUN_BRANCH` to persist branch name across function calls
+
+2. Created comprehensive test suite in `tests/git.bats`
+   - 28 tests covering all git.sh functions (existing + new)
+   - Tests for git_in_repo, git_get_current_branch, git_is_clean (from curb-021)
+   - Tests for git_init_run_branch: naming convention, checkout, error handling, existing branch handling
+   - Tests for git_get_run_branch: retrieval and error states
+   - Integration tests for complete workflows
+   - Acceptance criteria tests verifying all requirements
+
+### Test Results:
+- All 28 git.bats tests PASS
+- All 41 state.bats tests PASS (integration verification)
+- git_init_run_branch correctly creates branches from any starting branch
+- Handles existing branch conflicts gracefully with warnings
+- Timestamp format verified: YYYYMMDD-HHMMSS
+
+### Learnings:
+- **Global variable scope in BATS**: When using `run` command in BATS, it creates a subshell, so global variables set in the tested function aren't visible in the test. To verify global variable state, call the function directly without `run`.
+- **Timestamp resolution in tests**: When testing timestamp-based functionality, use `sleep 2` instead of `sleep 1` to ensure different timestamps (1 second resolution may not be enough due to test execution speed).
+- **Branch naming convention**: Using slashes in branch names (curb/{session}/{timestamp}) is valid and creates a logical hierarchy in git.
+- **git checkout -b**: Atomic operation that creates and checks out a branch in one command, better than separate `git branch` and `git checkout`.
+- **Existing branch detection**: Use `git rev-parse --verify "$branch_name"` to check if a branch exists without switching to it.
+
+### Implementation Details:
+- Branch naming: curb/{session_name}/{YYYYMMDD-HHMMSS}
+  - Example: curb/panda/20260110-163000
+  - Session name from session.sh's animal name generator
+  - Timestamp ensures uniqueness across multiple runs
+- Error handling:
+  - Returns 1 if not in git repo
+  - Returns 1 if session_name is empty
+  - Warns but succeeds if branch already exists
+- Works from any starting branch (main, feature branches, etc.)
+- Branch name stored in _GIT_RUN_BRANCH for retrieval via git_get_run_branch()
+
+### Acceptance Criteria Verification:
+✅ Branch created with correct naming convention (curb/{session}/{timestamp})
+✅ Branch checked out after creation
+✅ Handles existing branch gracefully (warns and checks out)
+✅ git_get_run_branch returns current run branch
+✅ Works from any starting branch
+
+### Files Modified:
+- lib/git.sh: Added git_init_run_branch() and git_get_run_branch()
+- tests/git.bats: Created new test file with comprehensive coverage
+
+### Dependencies & Next Tasks:
+- curb-022 is now complete
+- Git workflow foundation is ready for run-based branching
+- Next: Integrate git_init_run_branch with session initialization in main curb script
