@@ -568,7 +568,7 @@ artifacts_get_path() {
 #   artifacts_finalize_task "curb-123" "completed" "0" "All tests passed"
 artifacts_finalize_task() {
     local task_id="$1"
-    local status="$2"
+    local task_status="$2"  # renamed from 'status' to avoid BATS conflict
     local exit_code="$3"
     local summary_text="${4:-}"
 
@@ -578,7 +578,7 @@ artifacts_finalize_task() {
         return 1
     fi
 
-    if [[ -z "$status" ]]; then
+    if [[ -z "$task_status" ]]; then
         echo "ERROR: status is required" >&2
         return 1
     fi
@@ -609,7 +609,7 @@ artifacts_finalize_task() {
     # Update task.json with final status, completed_at, exit_code, and increment iterations
     local updated_json
     updated_json=$(jq \
-        --arg status "$status" \
+        --arg status "$task_status" \
         --arg completed_at "$completed_at" \
         --argjson exit_code "$exit_code" \
         '.status = $status | .completed_at = $completed_at | .exit_code = $exit_code | .iterations = (.iterations + 1)' \
@@ -691,7 +691,7 @@ artifacts_finalize_task() {
     local summary_content="# Task Summary: ${task_title}
 
 **Task ID:** ${task_id}
-**Status:** ${status}
+**Status:** ${task_status}
 **Exit Code:** ${exit_code}
 **Duration:** ${duration_text}
 **Files Changed:** ${files_changed}
@@ -731,7 +731,7 @@ ${summary_text:-No summary provided.}
     if [[ -f "$run_json" ]]; then
         # Increment tasks_completed or tasks_failed counter
         local counter_field
-        if [[ "$status" == "completed" ]]; then
+        if [[ "$task_status" == "completed" ]]; then
             counter_field="tasks_completed"
         else
             counter_field="tasks_failed"

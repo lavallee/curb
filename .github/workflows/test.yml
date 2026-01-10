@@ -25,14 +25,26 @@ jobs:
 
       - name: Run tests
         run: |
-          # Some hooks tests may not run on Linux due to bats compatibility issues
-          # The same tests pass on macOS
-          bats tests/ || true
-          # Check that at least 300 tests passed (we have 341 total)
-          count=$(bats --tap tests/ 2>&1 | grep -c "^ok ")
-          echo "Tests passed: $count"
-          if [ "$count" -lt 300 ]; then
-            echo "Too few tests passed!"
+          # Run tests and capture results
+          bats --tap tests/ 2>&1 | tee test_output.txt || true
+
+          # Count passed and failed tests
+          passed=$(grep -c "^ok " test_output.txt || echo "0")
+          failed=$(grep -c "^not ok " test_output.txt || echo "0")
+          echo "Tests passed: $passed"
+          echo "Tests failed: $failed"
+
+          # We have 496 total tests. On Linux some may be skipped due to:
+          # - bats version requirements (e2e.bats, integration.bats)
+          # - Platform-specific behavior
+          # Require at least 450 tests to pass with no failures
+          if [ "$failed" -gt 0 ]; then
+            echo "Test failures detected!"
+            grep "^not ok " test_output.txt
+            exit 1
+          fi
+          if [ "$passed" -lt 450 ]; then
+            echo "Too few tests passed! Expected at least 450."
             exit 1
           fi
 
@@ -51,12 +63,23 @@ jobs:
 
       - name: Run tests
         run: |
-          # One test may not run due to missing go command
-          bats tests/ || true
-          # Check that at least 330 tests passed (we have 341 total)
-          count=$(bats --tap tests/ 2>&1 | grep -c "^ok ")
-          echo "Tests passed: $count"
-          if [ "$count" -lt 330 ]; then
-            echo "Too few tests passed!"
+          # Run tests and capture results
+          bats --tap tests/ 2>&1 | tee test_output.txt || true
+
+          # Count passed and failed tests
+          passed=$(grep -c "^ok " test_output.txt || echo "0")
+          failed=$(grep -c "^not ok " test_output.txt || echo "0")
+          echo "Tests passed: $passed"
+          echo "Tests failed: $failed"
+
+          # We have 496 total tests. On macOS most should pass.
+          # Require at least 480 tests to pass with no failures
+          if [ "$failed" -gt 0 ]; then
+            echo "Test failures detected!"
+            grep "^not ok " test_output.txt
+            exit 1
+          fi
+          if [ "$passed" -lt 480 ]; then
+            echo "Too few tests passed! Expected at least 480."
             exit 1
           fi

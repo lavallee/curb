@@ -52,6 +52,864 @@ cmd_version() {
     return 0
 }
 
+# Show help for init subcommand
+cmd_init_help() {
+    cat <<'EOF'
+curb init [--global] [<directory>]
+
+Initialize curb in a project or globally.
+
+USAGE:
+  curb init              Initialize in current directory
+  curb init --global    Set up global configuration
+  curb init <dir>       Initialize in specific directory
+
+OPTIONS:
+  --global              Set up global configuration (~/.config/curb)
+                        Creates config templates and hook directories.
+                        Only needs to run once per system.
+
+  <directory>           Directory to initialize (default: current dir)
+                        Creates prd.json, PROMPT.md, AGENT.md, etc.
+
+WHAT IT CREATES:
+  prd.json              Task backlog in JSON format
+  PROMPT.md             System prompt template
+  AGENT.md              Build/run instructions
+  progress.txt          Progress tracking (auto-updated)
+  fix_plan.md           Issue tracking (auto-updated)
+  .gitignore            With curb patterns
+
+GLOBAL SETUP:
+  ~/.config/curb/config.json       Configuration defaults
+  ~/.config/curb/hooks/            Hook directories
+
+EXAMPLES:
+  # Initialize in current directory
+  curb init
+
+  # Initialize specific project
+  curb init ~/my-project
+
+  # Set up system-wide defaults
+  curb init --global
+
+  # Then initialize a project
+  curb init ~/my-project
+
+SEE ALSO:
+  curb --help       Show all commands
+  curb status       Check project status
+EOF
+}
+
+# Init subcommand - initialize a project
+cmd_init() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_init_help
+        return 0
+    fi
+
+    # Parse flags
+    local global_init=false
+    if [[ "${1:-}" == "--global" ]]; then
+        global_init=true
+        shift
+    fi
+
+    local target_dir="${1:-.}"
+
+    # ============================================================================
+    # Global initialization (--global flag)
+    # ============================================================================
+    if [[ "$global_init" == "true" ]]; then
+        log_info "Initializing global curb configuration"
+        echo ""
+
+        # Check dependencies
+        log_info "Checking dependencies..."
+        local missing_deps=()
+
+        # Check for jq
+        if ! command -v jq >/dev/null 2>&1; then
+            missing_deps+=("jq")
+            _log_error_console "Missing dependency: jq"
+            echo "  Install with: brew install jq (macOS) or apt-get install jq (Linux)"
+        else
+            log_success "Found jq"
+        fi
+
+        # Check for at least one harness
+        local harness_found=false
+        if command -v claude >/dev/null 2>&1; then
+            log_success "Found claude harness"
+            harness_found=true
+        fi
+        if command -v codex >/dev/null 2>&1; then
+            log_success "Found codex harness"
+            harness_found=true
+        fi
+
+        if [[ "$harness_found" == "false" ]]; then
+            missing_deps+=("harness (claude or codex)")
+            _log_error_console "No harness found (need claude or codex)"
+            echo "  Install Claude Code: https://claude.com/claude-code"
+            echo "  Or Codex: npm install -g @anthropic/codex"
+        fi
+
+        # Exit if dependencies missing
+        if [[ ${#missing_deps[@]} -gt 0 ]]; then
+            echo ""
+            _log_error_console "Missing required dependencies. Please install them and try again."
+            return 1
+        fi
+
+        echo ""
+        log_info "Creating global directory structure..."
+
+        # Create XDG directories
+        curb_ensure_dirs
+
+        local config_dir
+        config_dir="$(curb_config_dir)"
+        local config_file="${config_dir}/config.json"
+        local hooks_dir="${config_dir}/hooks"
+
+        log_success "Created ${config_dir}"
+        log_success "Created $(curb_logs_dir)"
+        log_success "Created $(curb_cache_dir)"
+
+        # Create config file with sensible defaults
+        log_info "Creating default configuration..."
+
+        if [[ -f "$config_file" ]]; then
+            log_warn "Config file already exists at ${config_file}"
+            log_warn "Skipping config creation (remove file to recreate)"
+        else
+            cat > "$config_file" <<'EOF'
+{
+  "harness": {
+    "default": "auto",
+    "priority": ["claude", "gemini", "codex", "opencode"]
+  },
+  "budget": {
+    "default": 1000000,
+    "warn_at": 0.8
+  },
+  "loop": {
+    "max_iterations": 100
+  },
+  "clean_state": {
+    "require_commit": true,
+    "require_tests": false
+  },
+  "hooks": {
+    "enabled": true
+  }
+}
+EOF
+            log_success "Created ${config_file}"
+        fi
+
+        # Create hook directories
+        log_info "Creating hook directories..."
+
+        local hook_types=("pre-loop" "pre-task" "post-task" "on-error" "post-loop")
+        for hook_type in "${hook_types[@]}"; do
+            local hook_dir="${hooks_dir}/${hook_type}.d"
+            if [[ ! -d "$hook_dir" ]]; then
+                mkdir -p "$hook_dir"
+                log_success "Created ${hook_dir}"
+            else
+                log_warn "${hook_dir} already exists"
+            fi
+        done
+
+        echo ""
+        log_success "Global curb configuration complete!"
+        echo ""
+        echo "Configuration:"
+        echo "  Config file:  ${config_file}"
+        echo "  Hooks:        ${hooks_dir}"
+        echo "  Logs:         $(curb_logs_dir)"
+        echo ""
+        echo "Next steps:"
+        echo "  1. Review and customize ${config_file}"
+        echo "  2. Add custom hooks to ${hooks_dir}/<hook-type>.d/"
+        echo "  3. Initialize a project with: curb init <project-dir>"
+        echo "  4. Start building: cd <project-dir> && curb"
+        echo ""
+        echo "Configuration options:"
+        echo "  harness.default       - Default harness to use (auto|claude|codex)"
+        echo "  harness.priority      - Order to try harnesses when auto"
+        echo "  budget.default        - Default token budget per run"
+        echo "  loop.max_iterations   - Maximum iterations before stopping"
+        echo "  clean_state.require_commit - Require harness to commit changes"
+        echo ""
+
+        return 0
+    fi
+
+    # ============================================================================
+    # Project initialization (default behavior)
+    # ============================================================================
+
+    # Get project name from directory
+    local project_name
+    project_name=$(basename "$(cd "$target_dir" && pwd)")
+    local prefix
+    prefix=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | head -c 8)
+    [[ -z "$prefix" ]] && prefix="prd"
+
+    log_info "Initializing curb in: ${target_dir}"
+    log_info "Project prefix: ${prefix}"
+
+    cd "$target_dir" || return 1
+
+    # Create specs directory
+    if [[ ! -d "specs" ]]; then
+        mkdir -p specs
+        log_success "Created specs/"
+    fi
+
+    # Create prd.json if not exists
+    if [[ ! -f "prd.json" ]]; then
+        cat > prd.json <<EOF
+{
+  "projectName": "${project_name}",
+  "branchName": "feature/${project_name}",
+  "prefix": "${prefix}",
+  "tasks": [
+    {
+      "id": "${prefix}-init",
+      "type": "task",
+      "title": "Project initialization",
+      "description": "Set up the initial project structure and configuration",
+      "acceptanceCriteria": [
+        "Project builds successfully",
+        "Basic structure in place",
+        "typecheck passes",
+        "tests pass (or test framework configured)"
+      ],
+      "priority": "P0",
+      "status": "open",
+      "dependsOn": [],
+      "notes": ""
+    }
+  ]
+}
+EOF
+        log_success "Created prd.json with initial task"
+    else
+        log_warn "prd.json already exists, skipping"
+    fi
+
+    # Create PROMPT.md
+    if [[ ! -f "PROMPT.md" ]]; then
+        cp "${CURB_DIR}/templates/PROMPT.md" PROMPT.md
+        log_success "Created PROMPT.md"
+    else
+        log_warn "PROMPT.md already exists, skipping"
+    fi
+
+    # Create AGENT.md
+    if [[ ! -f "AGENT.md" ]]; then
+        cp "${CURB_DIR}/templates/AGENT.md" AGENT.md
+        log_success "Created AGENT.md"
+    else
+        log_warn "AGENT.md already exists, skipping"
+    fi
+
+    # Create AGENTS.md symlink for Codex compatibility
+    # Codex CLI looks for AGENTS.md in the project root
+    if [[ ! -f "AGENTS.md" && ! -L "AGENTS.md" ]]; then
+        ln -s AGENT.md AGENTS.md
+        log_success "Created AGENTS.md symlink (for Codex compatibility)"
+    elif [[ -L "AGENTS.md" ]]; then
+        log_warn "AGENTS.md symlink already exists, skipping"
+    else
+        log_warn "AGENTS.md already exists as file, skipping symlink"
+    fi
+
+    # Create progress.txt
+    if [[ ! -f "progress.txt" ]]; then
+        cat > progress.txt <<EOF
+# Progress Log
+Started: $(date -u +"%Y-%m-%d")
+
+## Codebase Patterns
+<!-- Agent adds discovered patterns here for future iterations -->
+
+## Key Files
+<!-- Important files to be aware of -->
+
+---
+EOF
+        log_success "Created progress.txt"
+    else
+        log_warn "progress.txt already exists, skipping"
+    fi
+
+    # Create fix_plan.md
+    if [[ ! -f "fix_plan.md" ]]; then
+        cat > fix_plan.md <<EOF
+# Fix Plan
+
+Discovered issues and planned improvements.
+Agent maintains this file during development.
+
+## High Priority
+
+## Medium Priority
+
+## Low Priority
+
+## Completed
+EOF
+        log_success "Created fix_plan.md"
+    else
+        log_warn "fix_plan.md already exists, skipping"
+    fi
+
+    # Create .gitignore additions
+    if [[ -f ".gitignore" ]]; then
+        if ! grep -q "# Curb" .gitignore 2>/dev/null; then
+            cat >> .gitignore <<EOF
+
+# Curb
+*.curb.tmp
+EOF
+            log_success "Updated .gitignore"
+        fi
+    else
+        cat > .gitignore <<EOF
+# Curb
+*.curb.tmp
+EOF
+        log_success "Created .gitignore"
+    fi
+
+    echo ""
+    log_success "Curb initialized!"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit prd.json to add your tasks (use ChatPRD template output)"
+    echo "  2. Add specifications to specs/"
+    echo "  3. Update AGENT.md with build instructions"
+    echo "  4. Run 'curb status' to see task summary"
+    echo "  5. Run 'curb' to start the autonomous loop"
+    echo ""
+    echo "Useful commands:"
+    echo "  curb status        Show task progress"
+    echo "  curb run --ready   Show ready tasks"
+    echo "  curb run --once    Run single iteration"
+    echo "  curb run --plan    Run planning mode"
+    echo "  curb --harness codex Use OpenAI Codex instead of Claude"
+    echo ""
+
+    return 0
+}
+
+# Show help for run subcommand
+cmd_run_help() {
+    cat <<'EOF'
+curb run [<options>]
+
+Run the autonomous coding loop to complete tasks.
+
+USAGE:
+  curb run              Run continuous loop (default behavior)
+  curb run --once       Run exactly one iteration then exit
+  curb run --ready      Show ready (unblocked) tasks without running
+  curb run --plan       Run planning mode to analyze codebase
+
+EXECUTION OPTIONS:
+  --once, -1            Run single iteration then exit
+  --ready, -r           List tasks ready to work on
+  --plan, -p            Generate fix_plan.md with code analysis
+  --push                Push completed work to remote (experimental)
+
+FILTERING:
+  --epic <id>           Only work on tasks in this epic
+  --label <name>        Only work on tasks with this label
+
+MODEL & HARNESS:
+  --model <name>        Claude model: opus, sonnet, haiku
+  --harness <name>      AI harness: claude, codex, gemini, opencode
+
+RELIABILITY:
+  --require-clean       Force clean git state before starting
+  --no-require-clean    Disable clean state check
+
+BUDGET & LIMITS:
+  --budget <tokens>     Token budget limit (e.g., 1000000)
+  --name <name>         Session name for tracking
+
+DEBUG:
+  --debug, -d           Show detailed execution logs
+  --stream              Stream harness output in real-time
+
+EXAMPLES:
+  # Run continuous loop
+  curb run
+
+  # Run once with budget limit
+  curb run --once --budget 1000000
+
+  # View ready tasks without running
+  curb run --ready
+
+  # Work on specific epic only
+  curb run --epic backend-v2
+
+  # Use Sonnet with live output
+  curb run --model sonnet --stream
+
+  # Run with detailed debugging
+  curb run --once --debug
+
+SEE ALSO:
+  curb --help       Show all commands
+  curb status       Check current progress
+  curb artifacts    Access task output files
+EOF
+}
+
+# Run subcommand - run the main loop
+cmd_run() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_run_help
+        return 0
+    fi
+
+    # Parse run-specific flags
+    local args=()
+    local run_once=false
+    local run_plan=false
+    local run_ready=false
+
+    # Local copies of flag variables (can be overridden per-run)
+    local cmd_epic="${EPIC}"
+    local cmd_label="${LABEL}"
+    local cmd_model="${MODEL}"
+    local cmd_budget="${BUDGET}"
+    local cmd_require_clean="${REQUIRE_CLEAN}"
+    local cmd_session_name="${SESSION_NAME}"
+
+    for arg in "$@"; do
+        case "$arg" in
+            --once|-1)
+                run_once=true
+                ;;
+            --plan|-p)
+                run_plan=true
+                ;;
+            --ready|-r)
+                run_ready=true
+                ;;
+            --push)
+                # Future: handle push flag
+                log_warn "Push flag not yet implemented"
+                ;;
+            --require-clean)
+                cmd_require_clean="true"
+                export CURB_REQUIRE_CLEAN="true"
+                log_info "Clean state enforcement enabled via CLI flag"
+                ;;
+            --no-require-clean)
+                cmd_require_clean="false"
+                export CURB_REQUIRE_CLEAN="false"
+                log_info "Clean state enforcement disabled via CLI flag"
+                ;;
+            --model=*)
+                cmd_model="${arg#--model=}"
+                export CURB_MODEL="$cmd_model"
+                ;;
+            --model)
+                _next_is_model=true
+                ;;
+            --epic=*)
+                cmd_epic="${arg#--epic=}"
+                export CURB_EPIC="$cmd_epic"
+                ;;
+            --epic)
+                _next_is_epic=true
+                ;;
+            --label=*)
+                cmd_label="${arg#--label=}"
+                export CURB_LABEL="$cmd_label"
+                ;;
+            --label)
+                _next_is_label=true
+                ;;
+            --budget=*)
+                cmd_budget="${arg#--budget=}"
+                export CURB_BUDGET="$cmd_budget"
+                ;;
+            --budget)
+                _next_is_budget=true
+                ;;
+            --name=*)
+                cmd_session_name="${arg#--name=}"
+                export CURB_SESSION_NAME="$cmd_session_name"
+                ;;
+            --name)
+                _next_is_name=true
+                ;;
+            *)
+                # Handle deferred flag values
+                if [[ "${_next_is_model:-}" == "true" ]]; then
+                    cmd_model="$arg"
+                    export CURB_MODEL="$cmd_model"
+                    _next_is_model=false
+                elif [[ "${_next_is_epic:-}" == "true" ]]; then
+                    cmd_epic="$arg"
+                    export CURB_EPIC="$cmd_epic"
+                    _next_is_epic=false
+                elif [[ "${_next_is_label:-}" == "true" ]]; then
+                    cmd_label="$arg"
+                    export CURB_LABEL="$cmd_label"
+                    _next_is_label=false
+                elif [[ "${_next_is_budget:-}" == "true" ]]; then
+                    cmd_budget="$arg"
+                    export CURB_BUDGET="$cmd_budget"
+                    _next_is_budget=false
+                elif [[ "${_next_is_name:-}" == "true" ]]; then
+                    cmd_session_name="$arg"
+                    export CURB_SESSION_NAME="$cmd_session_name"
+                    _next_is_name=false
+                else
+                    args+=("$arg")
+                fi
+                ;;
+        esac
+    done
+
+    # Clean up flag parsing state
+    unset _next_is_model
+    unset _next_is_epic
+    unset _next_is_label
+    unset _next_is_budget
+    unset _next_is_name
+
+    # Update global variables if they were set via cmd_run flags
+    EPIC="$cmd_epic"
+    LABEL="$cmd_label"
+    MODEL="$cmd_model"
+    BUDGET="$cmd_budget"
+    REQUIRE_CLEAN="$cmd_require_clean"
+    SESSION_NAME="$cmd_session_name"
+
+    # Initialize budget if provided via CLI, environment, or config
+    # Get budget from: CLI flag > environment > config file
+    local budget_limit="${BUDGET:-$(config_get_or "budget.limit" "")}"
+    if [[ -n "$budget_limit" ]]; then
+        if budget_init "$budget_limit"; then
+            log_info "Budget initialized: ${budget_limit} tokens"
+        else
+            log_warn "Failed to initialize budget with value: ${budget_limit}"
+        fi
+    fi
+
+    validate_project
+
+    # Execute based on mode
+    if [[ "$run_ready" == "true" ]]; then
+        show_ready
+    elif [[ "$run_plan" == "true" ]]; then
+        run_planning
+    elif [[ "$run_once" == "true" ]]; then
+        run_iteration
+    else
+        run_loop
+    fi
+}
+
+# Show help for status subcommand
+cmd_status_help() {
+    cat <<'EOF'
+curb status [--json]
+
+Display current task progress and status summary.
+
+USAGE:
+  curb status           Show formatted status summary
+  curb status --json    Output status as machine-readable JSON
+
+OUTPUT:
+  When run without --json:
+    - Task counts (total, closed, in progress, open)
+    - Progress bar showing percentage complete
+    - Current session information (if running)
+    - Most recent run details
+
+  When run with --json:
+    - Machine-readable JSON with task counts
+    - Current session object (if initialized)
+    - Most recent run information
+
+EXAMPLES:
+  # Show human-readable status
+  curb status
+
+  # Check progress before running
+  curb status
+
+  # Get JSON for scripting
+  curb status --json | jq '.task_counts'
+
+  # Monitor while loop runs in background
+  watch -n 5 'curb status'
+
+SEE ALSO:
+  curb run --ready    List tasks ready to work on
+  curb --help         Show all commands
+  curb artifacts      Access task output files
+EOF
+}
+
+# Status subcommand - show task status
+cmd_status() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_status_help
+        return 0
+    fi
+
+    local json_output=false
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                json_output=true
+                shift
+                ;;
+            *)
+                _log_error_console "Unknown flag: $1"
+                _log_error_console "Usage: curb status [--json]"
+                return 1
+                ;;
+        esac
+    done
+
+    # In JSON mode, suppress logging during validation
+    if [[ "$json_output" == "true" ]]; then
+        validate_project >/dev/null 2>&1
+        show_status_json
+    else
+        validate_project
+        show_status
+    fi
+}
+
+# Show help for explain subcommand
+cmd_explain_help() {
+    cat <<'EOF'
+curb explain <task-id>
+
+Show detailed information about a specific task.
+
+USAGE:
+  curb explain <task-id>    Display full task details
+
+OUTPUT INCLUDES:
+  - Task ID and title
+  - Task type (task, feature, bugfix, etc)
+  - Current status (open, in_progress, closed, failed)
+  - Priority level
+  - Full description
+  - Acceptance criteria
+  - Dependencies (tasks that must be completed first)
+  - Labels and other metadata
+
+EXAMPLES:
+  # View task details
+  curb explain curb-018
+
+  # Look up a task's requirements
+  curb explain backend-001
+
+  # Check task dependencies
+  curb explain feature-42
+
+  # Verify acceptance criteria for a task
+  curb explain my-project-15
+
+SEE ALSO:
+  curb status      Check overall progress
+  curb run --ready List ready tasks
+  curb --help      Show all commands
+EOF
+}
+
+# Explain subcommand - show details about a task or session
+cmd_explain() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_explain_help
+        return 0
+    fi
+
+    local target="${1:-}"
+    if [[ -z "$target" ]]; then
+        _log_error_console "Usage: curb explain <task-id>"
+        return 1
+    fi
+
+    # Check if it's a task ID or session ID
+    local backend=$(get_backend "${PROJECT_DIR}")
+
+    # Try to get task first
+    local prd="${PROJECT_DIR}/prd.json"
+    local task
+    task=$(get_task "$prd" "$target" 2>/dev/null)
+
+    if [[ -n "$task" && "$task" != "null" ]]; then
+        # Found a task - show task details
+        echo "$task" | jq -r '
+            "Task: \(.id)",
+            "Title: \(.title)",
+            "Type: \(.type)",
+            "Status: \(.status)",
+            "Priority: \(.priority // "normal")",
+            "",
+            "Description:",
+            "\(.description)",
+            "",
+            (if .acceptanceCriteria then "Acceptance Criteria:\n- " + (.acceptanceCriteria | join("\n- ")) else "" end),
+            (if .dependsOn then "\nDepends on: " + (.dependsOn | join(", ")) else "" end),
+            (if .labels then "\nLabels: " + (.labels | join(", ")) else "" end)
+        '
+    else
+        # Not a task, maybe a session? (future implementation)
+        _log_error_console "Task or session not found: ${target}"
+        return 1
+    fi
+}
+
+# Show help for artifacts subcommand
+cmd_artifacts_help() {
+    cat <<'EOF'
+curb artifacts [<task-id>]
+
+Access and navigate to task artifact directories and output files.
+
+USAGE:
+  curb artifacts              List recent tasks with artifact paths
+  curb artifacts <task-id>    Show path to specific task artifacts
+  curb artifacts <prefix>     Find tasks by ID prefix (partial match)
+
+TASK ARTIFACTS INCLUDE:
+  - task.json              Task metadata and status
+  - summary.md             Execution summary
+  - changes.patch          Git diff of changes made
+  - logs/                  Detailed execution logs
+  - run.json               Run-level information
+
+EXAMPLES:
+  # List all recent tasks
+  curb artifacts
+
+  # Get path to specific task (useful for scripts)
+  curb artifacts curb-018
+  # Output: .curb/runs/panda-20260110-141339/tasks/curb-018
+
+  # Use in shell command
+  cd $(curb artifacts curb-018)
+  cat summary.md
+
+  # Find by prefix (shows matches if ambiguous)
+  curb artifacts curb-01
+
+  # View recent task summary
+  cat $(curb artifacts curb-017)/summary.md
+
+  # Examine git changes made by task
+  patch -p1 -R < $(curb artifacts curb-016)/changes.patch
+
+  # Find task logs
+  ls $(curb artifacts curb-015)/logs/
+
+SEE ALSO:
+  curb status      Check task progress
+  curb --help      Show all commands
+EOF
+}
+
+# Artifacts subcommand - manage artifacts
+cmd_artifacts() {
+    # Check for --help first
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cmd_artifacts_help
+        return 0
+    fi
+
+    local artifacts_base=".curb/runs"
+
+    # If no arguments given, list recent tasks with paths
+    if [[ $# -eq 0 ]]; then
+        if [[ ! -d "$artifacts_base" ]]; then
+            log_info "No artifacts found"
+            return 0
+        fi
+
+        log_info "Recent tasks:"
+        # Find all task directories, sort by modification time (newest first)
+        find "$artifacts_base" -maxdepth 3 -type d -name "curb-*" | sort -r | while read -r task_dir; do
+            if [[ -f "$task_dir/task.json" ]]; then
+                local task_id=$(basename "$task_dir")
+                echo "  ${task_id}: ${task_dir}"
+            fi
+        done
+        return 0
+    fi
+
+    # Find a task by task_id (supports prefix matching)
+    local search_id="$1"
+    local artifacts_base=".curb/runs"
+
+    if [[ ! -d "$artifacts_base" ]]; then
+        _log_error_console "No artifacts found (no runs yet)"
+        return 1
+    fi
+
+    # Search for matching task_id across all runs
+    # Support both exact and prefix matches
+    local matches=()
+    while IFS= read -r task_dir; do
+        if [[ -f "$task_dir/task.json" ]]; then
+            local task_id=$(basename "$task_dir")
+            # Check for exact match first, or prefix match
+            if [[ "$task_id" == "$search_id" ]] || [[ "$task_id" == "$search_id"* ]]; then
+                matches+=("$task_dir")
+            fi
+        fi
+    done < <(find "$artifacts_base" -maxdepth 3 -type d -name "curb-*" 2>/dev/null)
+
+    if [[ ${#matches[@]} -eq 0 ]]; then
+        _log_error_console "Task not found: ${search_id}"
+        _log_error_console "Tip: Run 'curb artifacts' to see available tasks"
+        return 1
+    fi
+
+    if [[ ${#matches[@]} -eq 1 ]]; then
+        # Single match - print the path
+        echo "${matches[0]}"
+        return 0
+    fi
+
+    # Multiple matches - show them and ask user to be more specific
+    _log_error_console "Ambiguous task ID '${search_id}' matches ${#matches[@]} tasks:"
+    for match in "${matches[@]}"; do
+        _log_error_console "  $(basename "$match"): ${match}"
+    done
+    _log_error_console "Please use a more specific prefix"
+    return 1
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -95,6 +953,19 @@ log_debug() {
     if [[ "$DEBUG" == "true" ]]; then
         echo -e "${DIM}${CYAN}[debug]${NC}${DIM} $1${NC}" >&2
     fi
+}
+
+# Deprecation warning helper
+warn_deprecated_flag() {
+    local old_flag="$1"
+    local new_syntax="$2"
+
+    # Check if deprecation warnings are suppressed
+    if [[ "${CURB_NO_DEPRECATION_WARNINGS:-}" == "1" ]]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}[curb]${NC} Warning: ${old_flag} is deprecated, use: ${new_syntax}" >&2
 }
 
 # Check dependencies
@@ -223,6 +1094,100 @@ show_status() {
         printf "%0.s-" $(seq 1 $empty 2>/dev/null) || true
         printf "] %d%%\n" "$pct"
     fi
+
+    # Show current session if running
+    if session_is_initialized; then
+        local session_name
+        session_name=$(session_get_name 2>/dev/null || echo "unknown")
+        local session_id
+        session_id=$(session_get_id 2>/dev/null || echo "unknown")
+        echo ""
+        log_info "Current Session"
+        echo "===================="
+        echo "Name: ${session_name}"
+        echo "ID:   ${session_id}"
+    fi
+
+    # Show most recent run
+    local artifacts_base="${PROJECT_DIR}/.curb/runs"
+    if [[ -d "$artifacts_base" ]]; then
+        local most_recent_run
+        most_recent_run=$(ls -t "$artifacts_base" 2>/dev/null | head -n 1)
+        if [[ -n "$most_recent_run" ]]; then
+            echo ""
+            log_info "Most Recent Run"
+            echo "===================="
+            echo "Run ID: ${most_recent_run}"
+            if [[ -f "$artifacts_base/$most_recent_run/run.json" ]]; then
+                local started_at
+                started_at=$(jq -r '.started_at // "unknown"' "$artifacts_base/$most_recent_run/run.json" 2>/dev/null || echo "unknown")
+                local status
+                status=$(jq -r '.status // "unknown"' "$artifacts_base/$most_recent_run/run.json" 2>/dev/null || echo "unknown")
+                echo "Started: ${started_at}"
+                echo "Status:  ${status}"
+                echo "Path:    ${artifacts_base}/${most_recent_run}"
+            fi
+        fi
+    fi
+}
+
+# Show status in JSON format
+show_status_json() {
+    local prd="${PROJECT_DIR}/prd.json"
+    local backend=$(get_backend "${PROJECT_DIR}")
+
+    # Validate JSON before processing (only for json backend)
+    if [[ "$backend" == "json" ]]; then
+        if ! jq empty "$prd" 2>/dev/null; then
+            _log_error_console "Invalid JSON in prd.json"
+            return 1
+        fi
+    fi
+
+    local counts
+    counts=$(get_task_counts "$prd")
+
+    # Build JSON output
+    local session_name="null"
+    local session_id="null"
+    if session_is_initialized; then
+        session_name="\"$(session_get_name 2>/dev/null || echo "unknown")\""
+        session_id="\"$(session_get_id 2>/dev/null || echo "unknown")\""
+    fi
+
+    local most_recent_run="null"
+    local artifacts_base="${PROJECT_DIR}/.curb/runs"
+    if [[ -d "$artifacts_base" ]]; then
+        local run_dir
+        run_dir=$(ls -t "$artifacts_base" 2>/dev/null | head -n 1)
+        if [[ -n "$run_dir" ]]; then
+            local started_at="unknown"
+            local status="unknown"
+            local run_path="${artifacts_base}/${run_dir}"
+            if [[ -f "$run_path/run.json" ]]; then
+                started_at=$(jq -r '.started_at // "unknown"' "$run_path/run.json" 2>/dev/null || echo "unknown")
+                status=$(jq -r '.status // "unknown"' "$run_path/run.json" 2>/dev/null || echo "unknown")
+            fi
+            most_recent_run=$(jq -n \
+                --arg id "$run_dir" \
+                --arg started "$started_at" \
+                --arg status "$status" \
+                --arg path "$run_path" \
+                '{id: $id, started_at: $started, status: $status, path: $path}')
+        fi
+    fi
+
+    # Output JSON
+    jq -n \
+        --argjson counts "$counts" \
+        --argjson session_name "$session_name" \
+        --argjson session_id "$session_id" \
+        --argjson most_recent_run "$most_recent_run" \
+        '{
+            task_counts: $counts,
+            current_session: (if $session_name != null then {name: $session_name, id: $session_id} else null end),
+            most_recent_run: $most_recent_run
+        }'
 }
 
 # Show ready tasks
@@ -808,7 +1773,7 @@ run_loop() {
 
 # Main entry point
 main() {
-    # Parse flags first (can be combined with other flags)
+    # Parse global flags (affect entire system) and separate run-specific flags
     local args=()
     for arg in "$@"; do
         if [[ "$arg" == "--debug" || "$arg" == "-d" ]]; then
@@ -821,14 +1786,6 @@ main() {
         elif [[ "$arg" == "--stream" ]]; then
             STREAM="true"
             log_info "Stream mode enabled - showing harness activity"
-        elif [[ "$arg" == "--require-clean" ]]; then
-            REQUIRE_CLEAN="true"
-            export CURB_REQUIRE_CLEAN="true"
-            log_info "Clean state enforcement enabled via CLI flag"
-        elif [[ "$arg" == "--no-require-clean" ]]; then
-            REQUIRE_CLEAN="false"
-            export CURB_REQUIRE_CLEAN="false"
-            log_info "Clean state enforcement disabled via CLI flag"
         elif [[ "$arg" == "--backend="* ]]; then
             BACKEND="${arg#--backend=}"
             export CURB_BACKEND="$BACKEND"
@@ -851,109 +1808,87 @@ main() {
             HARNESS="$arg"
             export HARNESS
             _next_is_harness=false
-        elif [[ "$arg" == "--model="* ]]; then
-            MODEL="${arg#--model=}"
-            export CURB_MODEL="$MODEL"
-        elif [[ "$arg" == "--model" ]]; then
-            # Next arg is the model value - handle in next iteration
-            _next_is_model=true
-            continue
-        elif [[ "${_next_is_model:-}" == "true" ]]; then
-            MODEL="$arg"
-            export CURB_MODEL="$MODEL"
-            _next_is_model=false
-        elif [[ "$arg" == "--epic="* ]]; then
-            EPIC="${arg#--epic=}"
-            export CURB_EPIC="$EPIC"
-        elif [[ "$arg" == "--epic" ]]; then
-            _next_is_epic=true
-            continue
-        elif [[ "${_next_is_epic:-}" == "true" ]]; then
-            EPIC="$arg"
-            export CURB_EPIC="$EPIC"
-            _next_is_epic=false
-        elif [[ "$arg" == "--label="* ]]; then
-            LABEL="${arg#--label=}"
-            export CURB_LABEL="$LABEL"
-        elif [[ "$arg" == "--label" ]]; then
-            _next_is_label=true
-            continue
-        elif [[ "${_next_is_label:-}" == "true" ]]; then
-            LABEL="$arg"
-            export CURB_LABEL="$LABEL"
-            _next_is_label=false
-        elif [[ "$arg" == "--budget="* ]]; then
-            BUDGET="${arg#--budget=}"
-            export CURB_BUDGET="$BUDGET"
-        elif [[ "$arg" == "--budget" ]]; then
-            # Next arg is the budget value - handle in next iteration
-            _next_is_budget=true
-            continue
-        elif [[ "${_next_is_budget:-}" == "true" ]]; then
-            BUDGET="$arg"
-            export CURB_BUDGET="$BUDGET"
-            _next_is_budget=false
-        elif [[ "$arg" == "--name="* ]]; then
-            SESSION_NAME="${arg#--name=}"
-            export CURB_SESSION_NAME="$SESSION_NAME"
-        elif [[ "$arg" == "--name" ]]; then
-            # Next arg is the session name value - handle in next iteration
-            _next_is_name=true
-            continue
-        elif [[ "${_next_is_name:-}" == "true" ]]; then
-            SESSION_NAME="$arg"
-            export CURB_SESSION_NAME="$SESSION_NAME"
-            _next_is_name=false
         else
+            # Pass all other args through (including run-specific flags)
             args+=("$arg")
         fi
     done
     unset _next_is_backend
     unset _next_is_harness
-    unset _next_is_model
-    unset _next_is_epic
-    unset _next_is_label
-    unset _next_is_budget
-    unset _next_is_name
 
     check_deps
     log_debug "Dependencies checked: jq and harness found"
 
-    # Initialize budget if provided via CLI or environment
-    # Get budget from: CLI flag > environment > config file
-    local budget_limit="${BUDGET:-$(config_get_or "budget.limit" "")}"
-    if [[ -n "$budget_limit" ]]; then
-        if budget_init "$budget_limit"; then
-            log_info "Budget initialized: ${budget_limit} tokens"
-        else
-            log_warn "Failed to initialize budget with value: ${budget_limit}"
-        fi
+    # Subcommand dispatcher (check for subcommands before legacy flags)
+    # Process first non-flag argument as potential subcommand
+    local first_arg="${args[0]:-}"
+
+    # Check if first arg is a subcommand (not a flag)
+    if [[ -n "$first_arg" && ! "$first_arg" =~ ^- ]]; then
+        case "$first_arg" in
+            init)
+                # Pass remaining args to cmd_init
+                cmd_init "${args[@]:1}"
+                return $?
+                ;;
+            run)
+                # Run the main loop with remaining args
+                cmd_run "${args[@]:1}"
+                return $?
+                ;;
+            status)
+                # Show task status
+                cmd_status "${args[@]:1}"
+                return $?
+                ;;
+            explain)
+                # Explain a task or session
+                cmd_explain "${args[@]:1}"
+                return $?
+                ;;
+            artifacts)
+                # Manage artifacts
+                cmd_artifacts "${args[@]:1}"
+                return $?
+                ;;
+            version)
+                # Show version
+                cmd_version
+                return $?
+                ;;
+            help)
+                # Show help (fall through to --help handling below)
+                args=("--help")
+                ;;
+            *)
+                # Unknown subcommand - show error and help
+                # (only show error for non-flag arguments)
+                if [[ ! "$first_arg" =~ ^- ]]; then
+                    _log_error_console "Unknown subcommand: ${first_arg}"
+                    echo ""
+                    args=("--help")
+                fi
+                ;;
+        esac
     fi
 
-    # Subcommand dispatcher (check for subcommands before flags)
-    case "${args[0]:-}" in
-        version)
-            cmd_version
-            return $?
-            ;;
-    esac
-
+    # Legacy flag parsing (for backwards compatibility)
     case "${args[0]:-}" in
         --status|-s)
-            validate_project
-            show_status
+            warn_deprecated_flag "--status" "curb status"
+            cmd_status "${args[@]:1}"
             ;;
         --ready|-r)
-            validate_project
-            show_ready
+            warn_deprecated_flag "--ready" "curb run --ready"
+            cmd_run --ready "${args[@]:1}"
             ;;
         --once|-1)
-            validate_project
-            run_iteration
+            warn_deprecated_flag "--once" "curb run --once"
+            cmd_run --once "${args[@]:1}"
             ;;
         --plan|-p)
-            validate_project
-            run_planning
+            warn_deprecated_flag "--plan" "curb run --plan"
+            cmd_run --plan "${args[@]:1}"
             ;;
         --test|-t)
             log_info "Testing Claude Code invocation..."
@@ -1034,111 +1969,114 @@ Say 'curb test successful' and nothing else."
             cat <<EOF
 curb v${CURB_VERSION} - Claude Under Ralph + Beads
 
-Autonomous AI coding agent that drives coding harnesses (Claude Code, Codex,
-Gemini, OpenCode) in a loop to complete tasks from a project backlog.
+Autonomous AI coding agent that drives harnesses in a loop to complete
+tasks from a project backlog.
+
+SUBCOMMANDS:
+  curb init [--global] [<dir>]  Initialize project or system
+  curb run [<options>]           Run the main loop (default)
+  curb status [--json]           Show task progress
+  curb explain <task-id>         Show task details
+  curb artifacts [<task-id>]     List task outputs
+  curb version                   Show version
 
 QUICK START:
-  curb              Run loop until all tasks complete
-  curb --once       Run single iteration and exit
-  curb --status     Show current task status and progress
-  curb --ready      List tasks ready to be worked on
-  curb --help       Show this help message
+  curb init                      Initialize in current directory
+  curb run                       Start the main loop
+  curb status                    Check progress
+  curb run --ready               List tasks to work on
 
-CORE FLAGS:
-  --harness <name>  Choose harness: "auto" (default), "claude", "codex", "gemini", or "opencode"
-  --model <name>    Claude model: "opus", "sonnet", or "haiku" (default: config)
-  --backend <mode>  Task backend: "auto" (default), "beads", or "json"
-  --budget <tokens> Set token budget limit for this run (e.g., 1000000)
+USE --help WITH ANY SUBCOMMAND:
+  curb init --help               Init subcommand help
+  curb run --help                Run subcommand help
+  curb status --help             Status subcommand help
+  curb explain --help            Explain subcommand help
+  curb artifacts --help          Artifacts subcommand help
 
-RELIABILITY & SAFETY FLAGS:
-  --require-clean   Force clean repository state before starting
-  --no-require-clean  Disable clean state requirement (overrides config)
-  --once            Run exactly one iteration then exit (for CI/testing)
+EXECUTION MODES:
+  curb                           Run continuous loop
+  curb run --once                Single iteration then exit
+  curb run --ready               List ready tasks
+  curb run --plan                Analyze code and plan
 
-DEBUG & TROUBLESHOOTING FLAGS:
-  --debug, -d       Enable verbose debug output:
-                    - Full prompts being sent to harness
-                    - Task selection and JSON details
-                    - Timing and execution information
-  --stream          Stream harness activity in real-time:
-                    - Tool calls as they happen
-                    - Text responses live
-                    - Final result and token usage
-  --plan            Generate fix_plan.md with code analysis
+CORE FLAGS (work with run):
+  --harness <name>               Use specific harness (auto, claude, codex,
+                                 gemini, opencode)
+  --model <name>                 Claude model (opus, sonnet, haiku)
+  --budget <tokens>              Set token budget (e.g., 1000000)
+  --name <name>                  Session name for tracking
 
-FILTERING FLAGS:
-  --epic <id>       Only work on tasks in this epic
-  --label <name>    Only work on tasks with this label
+FILTERING:
+  --epic <id>                    Work on tasks in epic
+  --label <name>                 Work on tasks with label
 
-UTILITY FLAGS:
-  --test            Test harness invocation with sample prompts
-  --dump-prompt     Export current task prompts to files for inspection
-  --migrate-to-beads      Migrate tasks from prd.json to beads
-  --migrate-to-beads-dry-run  Preview migration without changes
+RELIABILITY:
+  --require-clean                Enforce clean git state
+  --no-require-clean             Disable clean state check
 
-ENVIRONMENT VARIABLES:
-  CURB_PROJECT_DIR     Project directory (default: pwd)
-  CURB_MAX_ITERATIONS  Max loop iterations (default: 100)
-  CURB_DEBUG           Set to "true" to enable debug mode
-  CURB_BACKEND         Task backend: "auto", "beads", or "json"
-  CURB_BUDGET          Token budget limit for this run
-  CURB_REQUIRE_CLEAN   Set to "true" or "false" for clean state enforcement
-  HARNESS              Harness to use: "auto", "claude", "codex", "gemini", or "opencode"
-  CURB_MODEL           Claude model: "opus", "sonnet", or "haiku"
-  CURB_EPIC            Filter to tasks within this epic ID
-  CURB_LABEL           Filter to tasks with this label
-  CLAUDE_FLAGS         Extra flags for Claude Code CLI
-  CODEX_FLAGS          Extra flags for OpenAI Codex CLI
+DEBUGGING:
+  --debug, -d                    Show detailed logs
+  --stream                       Stream harness output
+  --backend <mode>               Task backend (auto, beads, json)
+
+UTILITY:
+  --test                         Test harness invocation
+  --dump-prompt                  Export task prompts
+  --migrate-to-beads             Convert prd.json to beads
+  --migrate-to-beads-dry-run     Preview migration
 
 EXAMPLES:
+  curb                           Start main loop
+  curb run --once                Single iteration
+  curb status                    Show progress
+  curb run --ready               List tasks
+  curb run --epic backend-v2     Work on epic
+  curb run --once --debug        Debug one iteration
+  curb run --model sonnet        Use Sonnet model
+  curb artifacts curb-018        Get task output
+  curb explain curb-018          See task details
+  curb init ~/my-project         Initialize project
+  curb init --global             Setup system config
 
-  # Run continuous loop with token budget
-  curb --budget 5000000
-
-  # Single iteration with clean state check
-  curb --once --require-clean
-
-  # Debug a specific epic
-  curb --epic backend-refactor --debug
-
-  # Stream output and limit to specific labels
-  curb --stream --label phase-1
-
-  # Use Sonnet model with budget tracking
-  curb --model sonnet --budget 2000000
-
-  # Check which tasks are ready without running
-  curb --ready
-
-  # View current progress
-  curb --status
+ENVIRONMENT VARIABLES:
+  CURB_PROJECT_DIR               Project directory (default: pwd)
+  CURB_MAX_ITERATIONS            Max loop iterations (default: 100)
+  CURB_DEBUG                     Set to "true" for debug
+  CURB_BACKEND                   Task backend (auto/beads/json)
+  CURB_BUDGET                    Token budget
+  CURB_REQUIRE_CLEAN             Clean state enforcement
+  HARNESS                        Harness to use
+  CURB_MODEL                     Claude model
+  CURB_EPIC                      Epic filter
+  CURB_LABEL                     Label filter
 
 PROJECT FILES:
-  .beads/           Beads task tracking (if using beads backend)
-  prd.json          Task backlog JSON (if using json backend)
-  PROMPT.md         System prompt template
-  AGENT.md          Build/run instructions for AI agent
-  specs/            Specification files
-  progress.txt      Automatically generated progress log
+  prd.json                       Task backlog (json backend)
+  .beads/                        Task tracking (beads backend)
+  PROMPT.md                      System prompt template
+  AGENT.md                       Build/run instructions
+  specs/                         Specification files
+  progress.txt                   Progress log
+  fix_plan.md                    Issue tracking
+
+LEARN MORE:
+  README.md                      Overview and features
+  CONFIG.md                      Configuration options
+  CONTRIBUTING.md                Development guidelines
 
 INSTALLATION:
-  Beads (optional, for beads backend):
+  Beads (optional):
     brew install steveyegge/beads/bd
     npm install -g @beads/bd
     go install github.com/steveyegge/beads/cmd/bd@latest
-
-LEARN MORE:
-  README.md         Project overview and features
-  CONFIG.md         Configuration and environment setup
-  CONTRIBUTING.md   Development guidelines
 EOF
             ;;
         --version)
             echo "curb v${CURB_VERSION}"
             ;;
         *)
-            validate_project
-            run_loop
+            # Default: run the main loop with all args
+            cmd_run "${args[@]}"
             ;;
     esac
 }
