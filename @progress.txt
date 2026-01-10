@@ -1,4 +1,35 @@
 
+## Task: curb-007 - Add curb version subcommand (Completed 2026-01-10)
+
+### What was done
+Implemented the version subcommand dispatcher pattern which establishes the foundation for adding more subcommands in Phase 2:
+- Added cmd_version() function that prints 'curb v${CURB_VERSION}'
+- Created subcommand dispatcher in main() that checks first argument before flag parsing
+- Falls through to existing flag parsing for backward compatibility
+- Version subcommand exits with code 0
+
+### Testing performed
+- Manual testing: `curb version` prints correct version string and exits with 0
+- Backward compatibility: `--version` flag still works
+- Other flags: `--help`, `--status` all continue working correctly
+- Full test suite: All 394 BATS tests pass with no regressions
+
+### Key learnings
+1. The subcommand dispatcher pattern is clean: check subcommands first, then fall through to flag parsing
+2. Bash case statements work well for dispatcher pattern - can easily extend for future subcommands
+3. Important to maintain backward compatibility - both `curb version` and `curb --version` work
+4. Minimal implementation (just 6 lines of code) establishes the pattern for Phase 2 refactoring
+5. The pattern allows for future subcommands like cmd_run, cmd_init, cmd_status to be added symmetrically
+
+### Files modified
+- curb: Added cmd_version() function and subcommand dispatcher case statement
+- .beads/issues.jsonl: Task status updated to closed
+
+### Next tasks enabled
+- curb-012: Create subcommand dispatcher in curb entry point (builds on this pattern)
+- curb-013: Extract main loop logic into cmd_run function
+- curb-014: Move curb-init logic into cmd_init
+
 ## Task: curb-a4p - Document config schema (Completed 2026-01-10)
 
 ### What was done
