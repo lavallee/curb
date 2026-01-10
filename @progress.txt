@@ -145,6 +145,53 @@ Next steps for future versions:
 - Performance optimizations if needed
 - Additional harness implementations as new AI tools emerge
 
+## Task: curb-016 - Implement cmd_artifacts to show task artifact paths (Completed 2026-01-10)
+
+### What was done
+Implemented the cmd_artifacts function with full support for task artifact discovery and navigation:
+- 'curb artifacts <task-id>' prints the full path to a task's artifact directory for easy access
+- 'curb artifacts' with no arguments lists all recent tasks with their artifact paths
+- Supports partial task ID prefix matching (e.g., 'curb artifacts curb-01' finds curb-012, curb-013, curb-014, etc.)
+- Handles ambiguous matches gracefully by showing all matching tasks and asking for more specificity
+- Provides helpful error messages when task not found, with a tip to run 'curb artifacts' to see available tasks
+
+### Implementation approach
+- Replaced previous subcommand-based design (list/show) with direct task lookup by task_id
+- Uses find to recursively search .curb/runs/*/tasks/ for task directories
+- Supports both exact matches and prefix matches on task IDs
+- Returns single match paths directly (useful for scripts: `cd $(curb artifacts curb-016)`)
+- Multiple matches show all options and ask user to be more specific
+
+### Testing performed
+- Manual tests with specific task IDs (curb-016) - works perfectly
+- Tested prefix matching with partial IDs (curb-01) - correctly shows ambiguous matches
+- Tested error case with non-existent task (curb-999) - provides helpful error message
+- Full test suite: All 438 BATS tests pass with no regressions
+
+### Key learnings
+1. Task lookup across multiple run directories requires proper search strategy - find with maxdepth is efficient
+2. Prefix matching is useful for user convenience but must handle ambiguity gracefully
+3. Array handling in bash works well for collecting multiple matches and displaying them
+4. Script-friendly output (single path on stdout) is important for command composition
+5. Error messages should be actionable - telling users how to see available tasks is more helpful than just saying "not found"
+6. Simple implementation is best - removed unnecessary list/show subcommands in favor of direct task_id lookup
+7. The artifact directory structure (.curb/runs/{run-name}/tasks/{task-id}) maps naturally to task_id search
+
+### Files modified
+- curb: Replaced cmd_artifacts function with new task lookup implementation
+- .beads/issues.jsonl: Task status updated to closed
+
+### Acceptance criteria met
+✓ 'curb artifacts <task-id>' prints path to artifacts
+✓ 'curb artifacts' lists recent tasks with paths
+✓ Helpful error message if task not found
+✓ Works with partial task IDs (prefix match)
+✓ All 438 BATS tests passing
+
+### Next tasks enabled
+- curb-017: Add deprecation warnings for legacy flag syntax (can now focus on CLI polish)
+- Phase 2 tasks build on this stable artifact management foundation
+
 ## Task: curb-008 - Write BATS tests for lib/session.sh (Completed 2026-01-10)
 
 ### What was done
