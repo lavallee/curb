@@ -672,3 +672,39 @@ Phase 1 validation complete. Ready to proceed to Phase 2: Reliability
 ### Test Coverage:
 - All 189 existing BATS tests continue to PASS
 - Manual testing verified filtering with beads backend works correctly
+
+## Session 11: Epic Closure (curb-1gq)
+
+### Task: Foundation: Config and Logging Infrastructure Epic
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was validated:
+This epic is a container for all Phase 1 foundation tasks. All 9 child tasks were already completed:
+
+1. **curb-iwv**: XDG directory structure and helpers
+2. **curb-1l6**: config.sh with config_get interface
+3. **curb-0u2**: Config file loading with global + project merge
+4. **curb-et7**: logger.sh with JSONL output
+5. **curb-ohp**: log_task_start/end functions with metadata
+6. **curb-13j**: Config integration into main curb script
+7. **curb-0b5**: Logger integration into main loop
+8. **curb-kiz**: curb init --global for onboarding
+9. **curb-hp9**: Checkpoint validation (Phase 1 complete)
+
+### Test Results:
+- All 189 BATS tests PASS
+- No linting required (shellcheck not installed)
+
+### Learnings:
+- **Epic tasks are containers**: Epics themselves don't have implementation work - they're closed when all child tasks are closed
+- **Beads parent-child relationships**: Use `depends_on_id` with `type: "parent-child"` to link tasks to epics
+- **Query child tasks**: `cat .beads/issues.jsonl | jq -s 'map(select(.dependencies[]?.depends_on_id == "<epic-id>" and .dependencies[]?.type == "parent-child"))'`
+
+### Phase 1 Complete:
+Foundation infrastructure is now fully in place:
+- XDG-compliant directory structure
+- Hierarchical config with env var overrides
+- Structured JSONL logging with task lifecycle events
+- Global onboarding command
+- All features validated and tested
