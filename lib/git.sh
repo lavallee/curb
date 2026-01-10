@@ -411,3 +411,77 @@ Task-ID: ${task_id}"
 
     return 0
 }
+
+# Push the current branch to remote with upstream tracking
+# Pushes the current branch to origin and sets up tracking relationship.
+# Requires explicit opt-in via --push flag for safety.
+#
+# Parameters:
+#   --force: Optional flag to force push (requires explicit confirmation)
+#
+# Returns:
+#   0 on success (branch pushed successfully)
+#   1 on error (not in a git repo, no remote, push failed, or user declined force push)
+#
+# Example:
+#   git_push_branch
+#   git_push_branch --force
+git_push_branch() {
+    local force_push=false
+
+    # Parse optional --force flag
+    if [[ "${1:-}" == "--force" ]]; then
+        force_push=true
+    fi
+
+    # Check if we're in a git repository
+    if ! git_in_repo; then
+        echo "ERROR: Not in a git repository" >&2
+        return 1
+    fi
+
+    # Get current branch name
+    local current_branch
+    current_branch=$(git_get_current_branch)
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Could not determine current branch" >&2
+        return 1
+    fi
+
+    # Check if remote 'origin' exists
+    if ! git remote get-url origin >/dev/null 2>&1; then
+        echo "ERROR: No 'origin' remote configured" >&2
+        return 1
+    fi
+
+    # Handle force push with extra confirmation
+    if [[ "$force_push" == "true" ]]; then
+        echo "WARNING: Force push requested for branch: ${current_branch}" >&2
+        echo "This will overwrite remote history. Are you sure? (yes/no)" >&2
+        read -r confirmation
+        if [[ "$confirmation" != "yes" ]]; then
+            echo "Force push cancelled" >&2
+            return 1
+        fi
+
+        # Perform force push
+        echo "Force pushing branch '${current_branch}' to origin..." >&2
+        if git push --force-with-lease -u origin "$current_branch" 2>&1; then
+            echo "Successfully force pushed branch '${current_branch}' to origin" >&2
+            return 0
+        else
+            echo "ERROR: Failed to force push branch '${current_branch}'" >&2
+            return 1
+        fi
+    fi
+
+    # Normal push with upstream tracking
+    echo "Pushing branch '${current_branch}' to origin..." >&2
+    if git push -u origin "$current_branch" 2>&1; then
+        echo "Successfully pushed branch '${current_branch}' to origin" >&2
+        return 0
+    else
+        echo "ERROR: Failed to push branch '${current_branch}'" >&2
+        return 1
+    fi
+}
