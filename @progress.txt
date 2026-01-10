@@ -1,3 +1,52 @@
+## Task: curb-018 - Update help text for subcommand CLI (Completed 2026-01-10)
+
+### What was done
+Implemented comprehensive help text for all subcommands and updated main help to clearly show the subcommand structure:
+- Added cmd_init_help() with project/global initialization guidance
+- Added cmd_run_help() with execution modes, filtering, and all available flags
+- Added cmd_status_help() with output format examples
+- Added cmd_artifacts_help() with task artifact access patterns and examples
+- Added cmd_explain_help() with task detail retrieval guidance
+- Updated main --help to show clear subcommand overview instead of huge flag listing
+- All subcommands now support --help/-h flags for quick reference
+- Included practical examples for common workflows in all help sections
+- Ensured all help text fits within 80-column terminal (max line: 75 chars)
+
+### Testing performed
+- Manual testing of all subcommand help: `curb init --help`, `curb run --help`, etc.
+- Main help tested: `curb --help` shows clear subcommand overview
+- Line length verification: All output fits within 80 columns
+- Full test suite: All 437 BATS tests pass with no regressions
+- Verified help for error cases (unknown subcommands still show help)
+
+### Key learnings
+1. Help text organization is critical for discoverability - users should see subcommands first, not flags
+2. Separate help functions for each subcommand makes the code cleaner and easier to maintain
+3. Including examples in help text dramatically improves usability - users can copy/paste patterns
+4. 80-column terminal width is still a real constraint - helps with readability on small terminals
+5. The pattern of checking for --help at the start of each cmd_* function is clean and consistent
+6. Help text should be organized into clear sections (USAGE, OPTIONS, EXAMPLES, SEE ALSO)
+7. Cross-referencing between help sections (SEE ALSO) helps users discover related commands
+8. Consistent formatting with aligned descriptions makes help text easier to scan
+
+### Acceptance criteria met
+✓ 'curb --help' shows subcommand overview
+✓ 'curb run --help' shows run-specific options
+✓ 'curb init --help' shows init-specific options
+✓ Examples included for common use cases
+✓ Help fits in standard terminal (80 cols, max achieved: 75)
+
+### Files modified
+- curb: Added help functions for init, run, status, artifacts, explain
+- Updated main --help with subcommand-focused layout
+- All functions now support --help/-h first-argument check
+
+### Implementation stats
+- Added 368 lines of help text
+- Removed 91 lines of old verbose flag documentation
+- Net addition: 277 lines (mostly help strings which improve UX significantly)
+- Help functions follow consistent pattern: cmd_*_help() with heredoc
+- Main help refactored from comprehensive flag listing to focused subcommand guide
 
 ## Task: curb-007 - Add curb version subcommand (Completed 2026-01-10)
 
