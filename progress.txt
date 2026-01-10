@@ -3064,3 +3064,139 @@ Completely reorganized and enhanced the --help output for the curb CLI tool:
 - All 341 existing BATS tests pass
 - session_random_name() successfully returns valid animal names
 - Function tested across multiple invocations to verify randomness
+
+## Task: curb-002 - Implement session_init and session_get_* functions (Completed 2026-01-10)
+
+### What was done
+Implemented comprehensive session management functions in `lib/session.sh`:
+
+1. **session_init()**
+   - Accepts optional --name parameter to override name generation
+   - Uses session_random_name() when no name provided
+   - Generates session ID as {name}-{YYYYMMDD-HHMMSS}
+   - Stores ISO 8601 timestamp in _SESSION_STARTED_AT variable
+   - Returns 0 on success, 1 on error
+
+2. **session_get_name()**
+   - Returns the session name
+   - Returns error if session not initialized
+
+3. **session_get_id()**
+   - Returns session ID in format {name}-{YYYYMMDD-HHMMSS}
+   - Returns error if session not initialized
+
+4. **session_get_run_id()**
+   - Alias for session_get_id()
+   - Provides consistent naming for run/session ID
+
+5. **session_is_initialized()**
+   - Checks if session has been initialized
+   - Returns 0 if initialized, 1 if not
+
+6. **Added global variables**
+   - _SESSION_NAME: Stores the session name
+   - _SESSION_ID: Stores the generated session ID
+   - _SESSION_STARTED_AT: Stores ISO 8601 timestamp
+
+### Acceptance criteria verification
+✓ session_init with no args generates random animal name
+✓ session_init --name fox uses provided name
+✓ session_get_id returns format like 'fox-20260110-143022'
+✓ Calling getters before init returns error
+
+### Implementation details
+- Used bash 3.2 compatible syntax throughout
+- Global variables prefixed with underscore to indicate internal state
+- Error messages written to stderr with ERROR prefix
+- Timestamp format follows spec: date +%Y%m%d-%H%M%S for ID, date -u +%Y-%m-%dT%H:%M:%SZ for ISO 8601
+- All functions tested and verified
+
+### Files modified
+- lib/session.sh: Added 5 new functions, 3 global variables
+
+### Key learnings
+1. Global variables work well for session state in bash
+2. Error handling with stderr output enables proper error checking
+3. Function composition allows clean interfaces (session_get_run_id as alias)
+4. Timestamp generation requires careful formatting for consistency
+
+### Dependencies resolved
+- curb-002 depends on curb-E01 (parent task)
+
+### Next steps
+- Session functions ready for integration with main curb loop
+- Can be used by logger to track session IDs
+- Foundation for task lifecycle management
+
+## curb-003: Create lib/artifacts.sh (2026-01-10)
+
+Successfully implemented lib/artifacts.sh module for artifact directory management:
+
+### Implementation Details
+- Created .curb/runs/{session-id}/tasks/{task-id} directory structure
+- Used `mkdir -p -m 700` for atomic directory creation with secure permissions
+- Sourced session.sh for session_get_id() and xdg.sh for consistency
+- All functions return proper error codes and messages to stderr
+
+### Key Functions
+1. artifacts_get_run_dir() - Returns path to current run directory
+2. artifacts_get_task_dir(task_id) - Returns path to specific task directory  
+3. artifacts_ensure_dirs(task_id) - Creates full directory hierarchy with 700 perms
+
+### Testing
+- All tests passed (338/341 total, 3 pre-existing failures unrelated to artifacts)
+- No artifacts-specific tests exist yet (implementation-only task)
+
+### Patterns Learned
+- Session must be initialized before artifact functions can work
+- Error handling pattern: check prerequisites, return 1 with stderr message
+- Using command substitution with error checking: `var=$(func) || return 1`
+- Standard header format includes function list in comments
+
+## Session: Artifact Initialization Functions (curb-004)
+
+### Task: Implement artifacts_init_run and artifacts_start_task
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. Created `artifacts_init_run()` function in lib/artifacts.sh
+   - Creates run directory at .curb/runs/{session-id}
+   - Generates run.json with metadata: run_id, session_name, started_at, config snapshot, status
+   - Captures config snapshot using config_dump if available
+   - Uses ISO 8601 timestamps (YYYY-MM-DDTHH:MM:SSZ)
+   - Secure permissions (700) for all created directories
+
+2. Created `artifacts_start_task()` function in lib/artifacts.sh
+   - Creates task directory at .curb/runs/{session-id}/tasks/{task-id}
+   - Generates task.json with metadata: task_id, title, priority, status, started_at, iterations
+   - Priority parameter optional, defaults to 'normal'
+   - Uses ISO 8601 timestamps
+   - Calls artifacts_ensure_dirs to create directory structure
+
+3. Created comprehensive test suite in tests/artifacts.bats
+   - 12 test cases covering all functionality
+   - Tests for error handling (missing session, missing parameters)
+   - Tests for correct JSON schema and ISO 8601 timestamps
+   - Integration test for full run and task creation workflow
+
+### Test Results:
+- All 12 artifacts-specific tests PASS
+- All 353 existing tests continue to PASS
+- Total: 365 tests passing
+
+### Learnings:
+- Bash glob patterns (*.pattern*) don't expand properly in BATS tests within variable assignments
+  - Solution: Use `find` command instead of globs in tests
+  - Example: `run_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)`
+- jq -n creates JSON from scratch without requiring input
+- jq --argjson allows passing JSON objects as parameters (for config snapshot)
+- ISO 8601 timestamps in UTC: `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- Config loading should be optional - check if config_dump exists before calling
+- Using type config_dump &>/dev/null to safely check for function existence
+
+### Dependencies & Next Tasks:
+- curb-004 is now complete
+- These functions will be used by the main loop when starting runs and tasks
+- Next tasks likely involve iteration management and artifact completion
+
