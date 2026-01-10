@@ -4204,3 +4204,41 @@ This task follows curb's established patterns:
 ### Next Steps:
 - curb-027: Write BATS tests for lib/git.sh (git_push_branch not yet tested)
 - Could add tests to verify --push flag behavior in integration tests
+
+## Session: curb-027 (Write BATS tests for lib/git.sh)
+Date: 2026-01-10
+Status: ✅ COMPLETE
+
+### What Was Done:
+Extended tests/git.bats with comprehensive tests for git_push_branch function, which was the only untested function in lib/git.sh. Added 13 new test cases covering:
+- Error conditions (no git repo, no remote, detached HEAD)
+- Normal push workflow with upstream tracking
+- Force push with confirmation requirements
+- Integration tests with bare remote repositories
+
+### Files Modified:
+- tests/git.bats (lines 991-1302, added git_push_branch test suite)
+- .beads/issues.jsonl (task curb-027 closed)
+
+### Key Testing Patterns Learned:
+1. **Bare Remote Testing**: Create temporary bare git repos with `git init --bare` to test push operations safely
+2. **Confirmation Testing**: Use `bash -c 'echo "yes" | function'` to simulate interactive confirmations in tests
+3. **Upstream Verification**: Use `git rev-parse --abbrev-ref --symbolic-full-name @{u}` to verify upstream tracking relationships
+4. **Test Isolation**: Each test creates its own REMOTE_DIR in BATS_TMPDIR and cleans up properly
+
+### Test Coverage Achievement:
+- Total tests in git.bats: 83 (all passing)
+- All functions in lib/git.sh now have comprehensive test coverage
+- Tests verify both success cases and error conditions
+- Integration tests verify end-to-end workflows
+
+### Acceptance Criteria Verified:
+- [x] tests/git.bats exists with comprehensive coverage
+- [x] All git functions tested (including previously untested git_push_branch)
+- [x] Tests use isolated temp repos for safety
+- [x] Tests verify commit messages and git operations
+- [x] All tests pass: bats tests/git.bats (83/83 ✓)
+
+### Next Steps:
+- All git.sh functions now have test coverage
+- Consider adding more edge case tests for complex scenarios (merge conflicts, etc.) if needed in future
