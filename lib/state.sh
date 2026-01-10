@@ -63,21 +63,32 @@ state_is_clean() {
 #   - true: Error and exit if changes detected
 #   - false: Warn but continue if changes detected
 #
+# Parameters:
+#   $1 - (optional) Override value: "true" or "false". If empty, uses config.
+#
 # Returns:
 #   0 if repository is clean or require_commit is false
 #   1 if repository has changes and require_commit is true (also exits process)
 #
 # Example:
-#   state_ensure_clean  # Checks and acts based on config
+#   state_ensure_clean           # Checks and acts based on config
+#   state_ensure_clean "true"    # Force require clean state
+#   state_ensure_clean "false"   # Force allow dirty state
 state_ensure_clean() {
+    local override="${1:-}"
+
     # Check if repo is clean
     if state_is_clean; then
         return 0
     fi
 
-    # Get configuration setting
+    # Get configuration setting (or use override)
     local require_commit
-    require_commit=$(config_get_or "clean_state.require_commit" "true")
+    if [[ -n "$override" ]]; then
+        require_commit="$override"
+    else
+        require_commit=$(config_get_or "clean_state.require_commit" "true")
+    fi
 
     # Get list of uncommitted files for error message
     local uncommitted_files

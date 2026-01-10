@@ -959,3 +959,118 @@ Token usage extraction is complete. Can now be integrated with budget tracking:
 2. Add --budget CLI flag (curb-0ub)
 3. Add budget warning at threshold
 
+## Session 15: Test Runner Integration (curb-g21)
+
+### Task: Add optional test runner integration
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. **Created `state_detect_test_command()`** in `lib/state.sh`
+   - Auto-detects test runners from project indicators
+   - Supports npm/yarn (package.json with test script)
+   - Supports make (Makefile with test target)
+   - Supports pytest (pytest.ini, setup.py, pyproject.toml, or tests/ directory)
+   - Supports Go (go.mod → `go test ./...`)
+   - Supports Rust (Cargo.toml → `cargo test`)
+   - Supports Ruby (Rakefile with test/spec targets)
+   - Prefers yarn over npm when yarn.lock exists
+   - Returns exit code 1 if no test command detected
+
+2. **Created `state_run_tests()`** in `lib/state.sh`
+   - Reads `clean_state.require_tests` from config (defaults to false)
+   - Returns success immediately if require_tests is false
+   - Calls `state_detect_test_command()` to find test runner
+   - Warns (but doesn't fail) if no test command detected
+   - Runs detected test command and captures output
+   - Logs test failures with structured error context (command, exit code, output)
+   - Returns 1 if tests fail and require_tests is true
+   - Provides helpful error messages with guidance
+
+3. **Created comprehensive test suite** - 23 new tests in `tests/state.bats`
+   - Test detection for all supported test runners
+   - Test require_tests config behavior
+   - Test passing and failing test scenarios
+   - Test helpful error messages and warnings
+   - All 5 acceptance criteria tests passing
+
+### Test Results:
+- All 23 new test runner tests PASS
+- All 263 total tests PASS (240 existing + 23 new)
+- No regressions in existing functionality
+
+### Learnings:
+
+- **Layered test detection pattern**: Priority-based detection with validation
+  - Check npm/yarn first (most common for node projects)
+  - Check make second (common for C/C++/general projects)
+  - Check language-specific runners (pytest, go, cargo, rake)
+  - Return immediately on first match for efficiency
+  - Prefer more specific indicators (yarn.lock) over general ones
+
+- **Test command validation patterns**: Don't just check for files, validate commands
+  - For npm: Check both package.json AND test script existence with `jq -e '.scripts.test'`
+  - For make: Use `make -n test` to verify target exists without running it
+  - For pytest: Check for multiple indicators (pytest.ini OR setup.py OR tests/ dir)
+  - Always check if command is available with `command -v` before returning it
+
+- **Graceful degradation**: When tests can't be found, warn but don't fail
+  - If `require_tests=true` but no test command detected, warn and return 0
+  - This prevents blocking progress on projects without tests
+  - Helpful warning lists supported test runners for user guidance
+  - Alternative: could fail hard, but that would be too strict for adoption
+
+- **Test output capture pattern**: Capture both stdout and stderr together
+  - `test_output=$($test_cmd 2>&1)` - combines streams for complete output
+  - Save exit code immediately: `test_exit_code=$?`
+  - Include full output in error message for debugging
+  - Log to structured error context with jq for queryability
+
+- **Config-driven behavior**: Make test requirements opt-in
+  - Default `require_tests` to false (don't break existing workflows)
+  - Allow users to enable strict mode in their config
+  - This matches pattern from `require_commit` setting
+  - Follows principle: be permissive by default, strict when requested
+
+- **Exit code semantics**: Distinguish between test failure and system failure
+  - Return 1 when tests fail (expected failure mode)
+  - Return 0 when tests disabled or not detected (not a failure)
+  - Return 0 when tests pass (success)
+  - This allows main loop to handle test failures appropriately
+
+- **Error message quality**: Provide actionable guidance
+  - Show the exact command that was run
+  - Show the full test output for debugging
+  - Explain how to disable the check if desired
+  - Pattern: "ERROR: what happened" + "Test command: X" + "Test output: Y" + "To disable: Z"
+
+- **Detection prioritization**: Order matters for correct tool selection
+  - Yarn before npm (yarn is more specific indicator)
+  - Language-specific before generic (pytest before just finding tests/ dir)
+  - File-based before command-based (check go.mod before checking `go` command)
+
+### Implementation Details:
+- Both functions added to existing `lib/state.sh` file
+- No new dependencies (uses existing jq, command -v, and shell builtins)
+- Integrates with existing config and logger infrastructure
+- Test command run in current directory (inherits project context)
+- Output captured with `$()` command substitution
+- Exit code preserved across function calls
+
+### Acceptance Criteria Met:
+✓ Detects test command for npm/yarn/make/pytest projects
+✓ Only runs if require_tests is true
+✓ Test failures logged clearly with structured context
+✓ Test output captured and displayed in error messages
+
+### Files Modified:
+- `lib/state.sh` - Added 2 new functions (147 lines total added)
+- `tests/state.bats` - Added 23 new tests (coverage for all detection paths)
+- `.beads/issues.jsonl` - Task closed
+
+### Next Steps:
+Test runner integration is complete. Next tasks in reliability phase:
+1. Integrate state_run_tests into main loop (curb-vdw)
+2. Add budget enforcement to main loop (curb-rvl)
+3. Add budget warning at threshold (curb-iji)
+
