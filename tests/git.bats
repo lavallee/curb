@@ -641,3 +641,349 @@ Line 3"
     # Both methods extract the same ID
     [[ "$extracted_id" == "$trailer_id" ]]
 }
+
+# ============================================================================
+# git_has_changes tests
+# ============================================================================
+
+@test "git_has_changes returns 0 when there are uncommitted changes" {
+    # Create a modification
+    echo "modified content" > README.md
+
+    run git_has_changes
+    [[ $status -eq 0 ]]
+}
+
+@test "git_has_changes returns 1 when repository is clean" {
+    # Repository is clean (from setup)
+    run git_has_changes
+    [[ $status -eq 1 ]]
+}
+
+@test "git_has_changes detects new untracked files" {
+    # Create new untracked file
+    echo "new file" > newfile.txt
+
+    run git_has_changes
+    [[ $status -eq 0 ]]
+}
+
+@test "git_has_changes detects staged changes" {
+    # Create and stage a change
+    echo "staged" > staged.txt
+    git add staged.txt
+
+    run git_has_changes
+    [[ $status -eq 0 ]]
+}
+
+@test "git_has_changes detects deleted files" {
+    # Delete a tracked file
+    rm README.md
+
+    run git_has_changes
+    [[ $status -eq 0 ]]
+}
+
+@test "git_has_changes returns 1 when not in git repo" {
+    # Create a new directory outside of git repo
+    NON_GIT_DIR="${BATS_TMPDIR}/non_git_$$"
+    mkdir -p "$NON_GIT_DIR"
+    cd "$NON_GIT_DIR"
+
+    run git_has_changes
+    [[ $status -eq 1 ]]
+
+    # Cleanup
+    cd /
+    rm -rf "$NON_GIT_DIR"
+}
+
+# ============================================================================
+# git_stash_changes tests
+# ============================================================================
+
+@test "git_stash_changes stashes working tree changes" {
+    # Create a change
+    echo "modified" > README.md
+
+    run git_stash_changes
+    [[ $status -eq 0 ]]
+
+    # Repository should now be clean
+    local is_clean
+    is_clean=$(git status --porcelain)
+    [[ -z "$is_clean" ]]
+}
+
+@test "git_stash_changes stashes modified tracked files" {
+    # Modify a tracked file
+    echo "modified" > README.md
+
+    run git_stash_changes
+    [[ $status -eq 0 ]]
+
+    # Modified file should be reverted
+    [[ "$(cat README.md)" == "initial" ]]
+}
+
+@test "git_stash_changes handles clean repository gracefully" {
+    # Repository is already clean
+
+    run git_stash_changes
+    [[ $status -eq 0 ]]
+
+    # Should succeed without error
+    [[ -z "$output" || "$output" != *"ERROR"* ]]
+}
+
+@test "git_stash_changes returns error when not in git repo" {
+    # Create a new directory outside of git repo
+    NON_GIT_DIR="${BATS_TMPDIR}/non_git_$$"
+    mkdir -p "$NON_GIT_DIR"
+    cd "$NON_GIT_DIR"
+
+    run git_stash_changes
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: Not in a git repository" ]]
+
+    # Cleanup
+    cd /
+    rm -rf "$NON_GIT_DIR"
+}
+
+@test "git_stash_changes saves state for restoration" {
+    # Create a change
+    echo "modified content" > README.md
+
+    # Stash it
+    git_stash_changes
+
+    # Verify it's gone
+    local status_output
+    status_output=$(git status --porcelain)
+    [[ -z "$status_output" ]]
+}
+
+# ============================================================================
+# git_unstash_changes tests
+# ============================================================================
+
+@test "git_unstash_changes restores stashed changes" {
+    # Create and stash a change
+    echo "modified" > README.md
+    git_stash_changes
+
+    # Verify it's gone
+    [[ "$(cat README.md)" == "initial" ]]
+
+    # Unstash
+    run git_unstash_changes
+    [[ $status -eq 0 ]]
+
+    # Changes should be restored
+    [[ "$(cat README.md)" == "modified" ]]
+}
+
+@test "git_unstash_changes restores new files" {
+    # Create new file and stash
+    echo "new file" > newfile.txt
+    git_stash_changes
+
+    # Verify file is gone
+    [[ ! -f newfile.txt ]]
+
+    # Unstash
+    run git_unstash_changes
+    [[ $status -eq 0 ]]
+
+    # File should be restored
+    [[ -f newfile.txt ]]
+    [[ "$(cat newfile.txt)" == "new file" ]]
+}
+
+@test "git_unstash_changes handles no stash gracefully" {
+    # No changes were stashed
+
+    run git_unstash_changes
+    [[ $status -eq 0 ]]
+
+    # Should succeed without error
+    [[ -z "$output" || "$output" != *"ERROR"* ]]
+}
+
+@test "git_unstash_changes returns error when not in git repo" {
+    # Create a new directory outside of git repo
+    NON_GIT_DIR="${BATS_TMPDIR}/non_git_$$"
+    mkdir -p "$NON_GIT_DIR"
+    cd "$NON_GIT_DIR"
+
+    run git_unstash_changes
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: Not in a git repository" ]]
+
+    # Cleanup
+    cd /
+    rm -rf "$NON_GIT_DIR"
+}
+
+@test "INTEGRATION: Stash and unstash workflow" {
+    # Make a change
+    echo "modified" > README.md
+    echo "new" > newfile.txt
+
+    # Verify changes exist
+    [[ $(git_has_changes) ]]
+
+    # Stash them
+    git_stash_changes
+
+    # Verify they're gone
+    run git_has_changes
+    [[ $status -eq 1 ]]
+
+    # Unstash them
+    git_unstash_changes
+
+    # Verify they're back
+    run git_has_changes
+    [[ $status -eq 0 ]]
+    [[ "$(cat README.md)" == "modified" ]]
+    [[ "$(cat newfile.txt)" == "new" ]]
+}
+
+# ============================================================================
+# git_get_base_branch and git_set_base_branch tests
+# ============================================================================
+
+@test "git_set_base_branch stores branch name" {
+    run git_set_base_branch "main"
+    [[ $status -eq 0 ]]
+}
+
+@test "git_get_base_branch returns stored branch name" {
+    git_set_base_branch "develop"
+
+    run git_get_base_branch
+    [[ $status -eq 0 ]]
+    [[ "$output" == "develop" ]]
+}
+
+@test "git_set_base_branch returns error when branch_name is empty" {
+    run git_set_base_branch ""
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: branch_name is required" ]]
+}
+
+@test "git_get_base_branch returns error when not set" {
+    # Clear the global variable
+    _GIT_BASE_BRANCH=""
+
+    run git_get_base_branch
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: Base branch not set" ]]
+}
+
+@test "git_set_base_branch allows any branch name" {
+    local branch_names=("main" "develop" "feature/x" "release/1.0" "origin/main")
+
+    for branch in "${branch_names[@]}"; do
+        git_set_base_branch "$branch"
+        local retrieved
+        retrieved=$(git_get_base_branch)
+        [[ "$retrieved" == "$branch" ]]
+    done
+}
+
+@test "INTEGRATION: Base branch tracking for PR workflow" {
+    # Store current branch as base
+    local base_branch
+    base_branch=$(git_get_current_branch)
+
+    git_set_base_branch "$base_branch"
+
+    # Create and checkout run branch
+    git_init_run_branch "panda"
+
+    # Verify we can still get base branch
+    local retrieved_base
+    retrieved_base=$(git_get_base_branch)
+    [[ "$retrieved_base" == "$base_branch" ]]
+}
+
+# ============================================================================
+# Acceptance criteria tests for new functions
+# ============================================================================
+
+@test "ACCEPTANCE: git_has_changes correctly detects changes" {
+    # Should be clean initially
+    run git_has_changes
+    [[ $status -eq 1 ]]
+
+    # Add changes
+    echo "modified" > README.md
+
+    # Should detect changes
+    run git_has_changes
+    [[ $status -eq 0 ]]
+
+    # Stash changes
+    git_stash_changes
+
+    # Should be clean again
+    run git_has_changes
+    [[ $status -eq 1 ]]
+}
+
+@test "ACCEPTANCE: git_stash_changes and git_unstash_changes work for temporary storage" {
+    # Create changes
+    echo "modified content" > README.md
+    echo "new file" > test.txt
+
+    # Stash them
+    git_stash_changes
+
+    # Do some git operation (simulate)
+    git checkout -q -b temp-branch
+    git checkout -q main 2>/dev/null || git checkout -q master 2>/dev/null
+
+    # Unstash
+    git_unstash_changes
+
+    # Verify they're restored
+    [[ "$(cat README.md)" == "modified content" ]]
+    [[ "$(cat test.txt)" == "new file" ]]
+}
+
+@test "ACCEPTANCE: git_get_base_branch returns stored branch for PR creation" {
+    # Store where we're branching from
+    local current_branch
+    current_branch=$(git_get_current_branch)
+    git_set_base_branch "$current_branch"
+
+    # Create and checkout run branch
+    git_init_run_branch "panda"
+
+    # Later we can get the base branch for PR
+    local base
+    base=$(git_get_base_branch)
+    [[ "$base" == "$current_branch" ]]
+}
+
+@test "ACCEPTANCE: Base branch tracked across run session" {
+    # Store main as base
+    git_set_base_branch "main"
+
+    # Create run branch
+    git_init_run_branch "panda"
+
+    # Make some changes
+    echo "work" > work.txt
+    git add work.txt
+    git commit -q -m "Work"
+
+    # Base branch should still be available
+    local base
+    base=$(git_get_base_branch)
+    [[ "$base" == "main" ]]
+}

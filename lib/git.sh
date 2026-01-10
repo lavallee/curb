@@ -169,6 +169,165 @@ git_get_run_branch() {
     return 0
 }
 
+# Check if the repository has uncommitted changes
+# Returns 0 if there are uncommitted changes, 1 if clean
+# Uses git status --porcelain for efficiency
+#
+# Returns:
+#   0 if there are changes (has changes)
+#   1 if repository is clean (no changes)
+#
+# Example:
+#   if git_has_changes; then
+#     echo "Repository has uncommitted changes"
+#   else
+#     echo "Repository is clean"
+#   fi
+git_has_changes() {
+    # Check if we're in a git repository
+    if ! git_in_repo; then
+        return 1
+    fi
+
+    # Use git status --porcelain for efficient change detection
+    # Returns empty string if clean, non-empty if there are changes
+    local changes
+    changes=$(git status --porcelain 2>/dev/null)
+
+    if [[ -n "$changes" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Global variables to store stash state
+_GIT_STASH_ID=""
+_GIT_STASH_SAVED=0
+
+# Stash uncommitted changes temporarily
+# Useful for switching branches or doing other git operations
+#
+# Returns:
+#   0 on success (changes stashed or nothing to stash)
+#   1 on error
+#
+# Example:
+#   git_stash_changes
+#   # do some git operations
+#   git_unstash_changes
+git_stash_changes() {
+    # Check if we're in a git repository
+    if ! git_in_repo; then
+        echo "ERROR: Not in a git repository" >&2
+        return 1
+    fi
+
+    # Check if there are changes to stash
+    if ! git_has_changes; then
+        # No changes to stash
+        return 0
+    fi
+
+    # Generate a unique stash identifier based on timestamp
+    _GIT_STASH_ID="curb-stash-$(date +%s)"
+
+    # Stash changes with our identifier
+    if ! git stash push -m "$_GIT_STASH_ID" >/dev/null 2>&1; then
+        echo "ERROR: Failed to stash changes" >&2
+        _GIT_STASH_ID=""
+        return 1
+    fi
+
+    _GIT_STASH_SAVED=1
+    return 0
+}
+
+# Unstash previously stashed changes
+# Restores changes that were stashed with git_stash_changes
+#
+# Returns:
+#   0 on success (changes restored or nothing to restore)
+#   1 on error
+#
+# Example:
+#   git_stash_changes
+#   # do some git operations
+#   git_unstash_changes
+git_unstash_changes() {
+    # Check if we're in a git repository
+    if ! git_in_repo; then
+        echo "ERROR: Not in a git repository" >&2
+        return 1
+    fi
+
+    # If no stash was saved, nothing to do
+    if [[ $_GIT_STASH_SAVED -eq 0 ]] || [[ -z "$_GIT_STASH_ID" ]]; then
+        return 0
+    fi
+
+    # Apply and remove the stash
+    if ! git stash pop >/dev/null 2>&1; then
+        echo "ERROR: Failed to unstash changes" >&2
+        return 1
+    fi
+
+    # Clear stash tracking variables
+    _GIT_STASH_ID=""
+    _GIT_STASH_SAVED=0
+
+    return 0
+}
+
+# Global variable to store the base branch (where we branched from)
+_GIT_BASE_BRANCH=""
+
+# Store the base branch name
+# This remembers what branch we branched from, useful for PR creation
+#
+# Parameters:
+#   $1 - branch_name: The base branch name (e.g., "main", "develop")
+#
+# Returns:
+#   0 on success
+#   1 on error (invalid branch name)
+#
+# Example:
+#   git_set_base_branch "main"
+#   # later...
+#   base=$(git_get_base_branch)
+git_set_base_branch() {
+    local branch_name="$1"
+
+    if [[ -z "$branch_name" ]]; then
+        echo "ERROR: branch_name is required" >&2
+        return 1
+    fi
+
+    _GIT_BASE_BRANCH="$branch_name"
+    return 0
+}
+
+# Get the base branch name
+# Returns the branch name that was set by git_set_base_branch
+#
+# Returns:
+#   Echoes the base branch name
+#   Returns 0 on success
+#   Returns 1 if base branch has not been set
+#
+# Example:
+#   base=$(git_get_base_branch)
+git_get_base_branch() {
+    if [[ -z "$_GIT_BASE_BRANCH" ]]; then
+        echo "ERROR: Base branch not set. Call git_set_base_branch first." >&2
+        return 1
+    fi
+
+    echo "$_GIT_BASE_BRANCH"
+    return 0
+}
+
 # Commit all changes with a structured task message format
 # Stages all changes and creates a commit with task attribution.
 #
