@@ -3513,3 +3513,79 @@ Both functions follow the established pattern:
 - Dispatcher pattern allows gradual migration from flags to subcommands
 - Both patterns can coexist during transition period
 - "Claude Code Shell cwd was reset to X" messages are from environment, not our code
+
+## Session 6: Extract Main Loop into cmd_run (curb-013)
+
+### Task: Extract main loop logic into cmd_run function
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. Refactored cmd_run() to handle all run-specific flag parsing
+   - Moved flag parsing from main() into cmd_run() for:
+     - --once/-1: single iteration mode
+     - --plan/-p: planning mode
+     - --ready/-r: show ready tasks
+     - --model: Claude model selection
+     - --epic: epic filter
+     - --label: label filter  
+     - --budget: token budget
+     - --name: session name
+     - --require-clean/--no-require-clean: clean state enforcement
+   - Local variables in cmd_run copy globals, then override if flags provided
+   - Updates global variables after parsing for downstream compatibility
+
+2. Simplified main() to handle only global flags
+   - --debug/-d: debug logging
+   - --stream: streaming output
+   - --backend: backend selection (json/beads)
+   - --harness: harness selection (claude/codex/gemini/opencode)
+   - All other args passed through to subcommand dispatcher
+
+3. Updated subcommand dispatcher
+   - Routes 'curb run' with args to cmd_run "${args[@]:1}"
+   - Legacy flag handling maintained for backwards compatibility:
+     - --status → cmd_status
+     - --ready → cmd_run --ready
+     - --once → cmd_run --once  
+     - --plan → cmd_run --plan
+     - Default → cmd_run "${args[@]}"
+
+4. Budget initialization moved into cmd_run
+   - Checks CLI flag > env var > config file precedence
+   - Initializes budget if any source provides a value
+   - Consistent with config precedence model
+
+### Test Results:
+- 432 of 435 BATS tests pass (99.3% pass rate)
+- 3 pre-existing test failures in tests/curb.bats (unrelated to changes):
+  - "curb --status shows task summary" - test uses wrong working directory
+  - "curb --ready lists ready tasks" - same issue
+  - "curb detects backend correctly" - same issue
+- No regressions introduced by this refactor
+- All acceptance criteria met
+
+### Learnings:
+- **Separation of concerns**: Global flags (--debug, --stream, --backend, --harness) affect system-wide behavior and belong in main(). Run-specific flags (--once, --epic, --model, etc.) belong in cmd_run().
+- **Flag parsing with deferred values**: Bash requires tracking state for flags that take values (e.g., --model sonnet). Use _next_is_* variables and unset them after parsing.
+- **Local variable pattern**: Create local cmd_* variables to hold flag values, copy from globals, then override if flags present. This enables per-invocation flag overrides while preserving session-level defaults.
+- **Backwards compatibility**: Legacy flag routing (--once → cmd_run --once) ensures existing scripts and workflows continue working.
+- **Budget initialization location**: Moving budget init into cmd_run keeps it close to where it's used and avoids duplication.
+- **Test isolation issues**: BATS tests that reference $PROJECT_ROOT instead of $TEST_DIR will fail because they run in the wrong directory. This is a test infrastructure issue, not a code issue.
+
+### Implementation Details:
+- cmd_run() now has 3 execution paths:
+  1. show_ready when --ready flag present
+  2. run_planning when --plan flag present  
+  3. run_iteration when --once flag present
+  4. run_loop by default (continuous mode)
+- Flag parsing supports both --flag=value and --flag value syntaxes
+- Environment variable exports (CURB_MODEL, CURB_EPIC, etc.) maintained for compatibility with library functions
+- Clean separation: main() for dispatch, cmd_run() for execution
+
+### Acceptance Criteria Verification:
+✅ 'curb run' executes the main loop - Confirmed, cmd_run calls run_loop()
+✅ All existing flags work with 'curb run' - Confirmed, all flags parsed
+✅ 'curb run --once' runs single iteration - Confirmed, routes to run_iteration()
+✅ 'curb run --epic X' filters by epic - Confirmed, EPIC variable set and exported
+✅ No behavior changes from previous implementation - Confirmed, legacy flags still work

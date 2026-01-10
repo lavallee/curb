@@ -1,7 +1,7 @@
 {
-  "run_id": "panda-20260110-130434",
-  "session_name": "panda",
-  "started_at": "2026-01-10T18:04:34Z",
+  "run_id": "mouse-20260110-132927",
+  "session_name": "mouse",
+  "started_at": "2026-01-10T18:29:27Z",
   "status": "in_progress",
   "config": {
     "harness": {
@@ -25,6 +25,5 @@
     "hooks": {
       "enabled": true
     }
-  },
-  "tasks_failed": 2
+  }
 }
