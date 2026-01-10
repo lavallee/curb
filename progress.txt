@@ -2341,3 +2341,82 @@ Successfully implemented OpenCode as a supported harness in lib/harness.sh follo
 - lib/harness.sh (152 lines added, 4 lines modified)
 - .beads/issues.jsonl (task closed)
 
+
+## Session 12: Harness Capability Detection (curb-kod)
+
+### Task: Add harness capability detection
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. Defined 4 capability constants for harness feature detection:
+   - `streaming` - Real-time streaming output with JSON format
+   - `token_reporting` - Reports token usage after invocation
+   - `system_prompt` - Supports separate system prompt flag
+   - `auto_mode` - Has autonomous/auto-approve mode for unattended operation
+
+2. Created `harness_supports(capability [, harness])` function:
+   - Returns 0 (success) if the harness supports the capability
+   - Returns 1 (failure) if not supported or unknown capability
+   - Uses current harness if second argument not provided
+   - Validates that capability argument is provided
+
+3. Implemented capability definitions for each harness:
+   - **claude**: Full support (streaming, token_reporting, system_prompt, auto_mode)
+   - **opencode**: streaming, token_reporting, auto_mode (no system_prompt flag)
+   - **codex**: auto_mode only (no streaming or token reporting in CLI)
+   - **gemini**: auto_mode only (v0.1.9 lacks streaming and token reporting)
+
+4. Added capability logging at startup in debug mode:
+   - Shows each capability and whether it's supported
+   - Provides hints for degraded behavior (e.g., "will estimate from cost")
+   - Located in check_deps() function in main curb script
+
+5. Added `harness_get_capabilities_json()` helper for debugging:
+   - Returns all capabilities as JSON object with boolean flags
+   - Useful for programmatic capability inspection
+
+### Test Results:
+- 16 new tests added to tests/harness.bats
+- All 317 tests pass (45 harness tests total)
+
+### Learnings:
+- **Capability abstraction pattern**: Use space-separated string for capability list
+  - Simple bash pattern: `case " $caps " in *" $cap "*) return 0 ;; esac`
+  - Avoids array syntax issues in bash 3.2
+  - Easy to iterate and check membership
+
+- **Capability discovery vs capability checking**:
+  - `_harness_get_capabilities()` returns list (internal, for iteration)
+  - `harness_supports()` checks single capability (public, returns bool)
+  - `harness_get_capabilities_json()` returns JSON (for debugging/logging)
+  - This pattern supports both programmatic checks and human-readable output
+
+- **Graceful degradation**: Design capabilities around what can be adapted
+  - If no streaming: fall back to non-streaming mode
+  - If no token_reporting: estimate tokens from cost
+  - If no system_prompt: combine prompts manually
+  - All harnesses have auto_mode (required for autonomous operation)
+
+- **Debug logging location**: Put capability logging in check_deps()
+  - Already gated by DEBUG flag
+  - Natural place for startup diagnostics
+  - Runs before any harness invocation
+
+### Implementation Details:
+- Capability constants defined as readonly bash variables for documentation
+- Case statement in _harness_get_capabilities for each harness
+- Pattern matching with case statement for capability checking
+- JSON construction with jq for structured output
+
+### Acceptance Criteria Met:
+✓ Can query if harness supports streaming
+✓ Can query if harness reports tokens
+✓ Main loop can adapt to capabilities (via harness_supports checks)
+✓ Degraded mode works when capability missing (returns false, caller adapts)
+
+### Files Modified:
+- lib/harness.sh (136 lines added - capability detection section)
+- curb (27 lines added - debug capability logging)
+- tests/harness.bats (160 lines added - 16 new tests)
+- .beads/issues.jsonl (task closed)
