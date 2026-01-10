@@ -395,6 +395,8 @@ jq 'select(.data.tokens_used > 10000)' ~/.local/share/curb/logs/myproject/*.json
 
 Curb uses XDG-compliant configuration with global and project-level overrides.
 
+For a complete reference of all configuration options, see [docs/CONFIG.md](docs/CONFIG.md).
+
 ### Global Setup
 
 ```bash
