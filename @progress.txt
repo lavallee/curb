@@ -1,0 +1,31 @@
+
+## Task: curb-a4p - Document config schema (Completed 2026-01-10)
+
+### What was done
+Created comprehensive configuration reference documentation in `docs/CONFIG.md` covering:
+- Configuration precedence and priority order (CLI flags > env vars > project config > global config > defaults)
+- All configuration sections: Harness, Budget, Loop, Clean State, Hooks
+- Complete environment variables reference (15+ variables documented)
+- CLI flags reference (16+ flags documented)
+- Directory structure (XDG-compliant paths)
+- Configuration examples for common scenarios (development, production, CI/CD, per-model)
+- Debugging and troubleshooting sections
+
+### Key learnings
+1. Configuration hierarchy is well-designed with clear precedence rules
+2. All config options have sensible defaults that work for most use cases
+3. The configuration system supports both global (~/.config/curb/config.json) and project-level (.curb.json) overrides
+4. Budget tracking is particularly important for cost control - warn_at threshold helps prevent surprise costs
+5. Hooks system is flexible but requires clear documentation on locations and structure
+
+### Files created/modified
+- Created: docs/CONFIG.md (523 lines, comprehensive reference)
+- Modified: README.md (added link to CONFIG.md in Configuration section)
+- Task status: closed via beads (curb-a4p)
+
+### Test results
+All 327 existing BATS tests pass after changes.
+
+### Dependencies
+- Task blocks: curb-61a (Checkpoint: Curb 1.0 Ready for Release)
+- No blocking dependencies
