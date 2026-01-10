@@ -7,17 +7,164 @@
 set -euo pipefail
 
 CURB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source XDG helpers for global init
+source "${CURB_DIR}/lib/xdg.sh"
+
+# Parse flags
+GLOBAL_INIT=false
+if [[ "${1:-}" == "--global" ]]; then
+    GLOBAL_INIT=true
+    shift
+fi
+
 PROJECT_DIR="${1:-.}"
 
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 log_info() { echo -e "${BLUE}[curb-init]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb-init]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[curb-init]${NC} $1"; }
+log_error() { echo -e "${RED}[curb-init]${NC} $1" >&2; }
+
+# ============================================================================
+# Global initialization (--global flag)
+# ============================================================================
+if [[ "$GLOBAL_INIT" == "true" ]]; then
+    log_info "Initializing global curb configuration"
+    echo ""
+
+    # Check dependencies
+    log_info "Checking dependencies..."
+    MISSING_DEPS=()
+
+    # Check for jq
+    if ! command -v jq >/dev/null 2>&1; then
+        MISSING_DEPS+=("jq")
+        log_error "Missing dependency: jq"
+        echo "  Install with: brew install jq (macOS) or apt-get install jq (Linux)"
+    else
+        log_success "Found jq"
+    fi
+
+    # Check for at least one harness
+    HARNESS_FOUND=false
+    if command -v claude >/dev/null 2>&1; then
+        log_success "Found claude harness"
+        HARNESS_FOUND=true
+    fi
+    if command -v codex >/dev/null 2>&1; then
+        log_success "Found codex harness"
+        HARNESS_FOUND=true
+    fi
+
+    if [[ "$HARNESS_FOUND" == "false" ]]; then
+        MISSING_DEPS+=("harness (claude or codex)")
+        log_error "No harness found (need claude or codex)"
+        echo "  Install Claude Code: https://claude.com/claude-code"
+        echo "  Or Codex: npm install -g @anthropic/codex"
+    fi
+
+    # Exit if dependencies missing
+    if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
+        echo ""
+        log_error "Missing required dependencies. Please install them and try again."
+        exit 1
+    fi
+
+    echo ""
+    log_info "Creating global directory structure..."
+
+    # Create XDG directories
+    curb_ensure_dirs
+
+    CONFIG_DIR="$(curb_config_dir)"
+    CONFIG_FILE="${CONFIG_DIR}/config.json"
+    HOOKS_DIR="${CONFIG_DIR}/hooks"
+
+    log_success "Created ${CONFIG_DIR}"
+    log_success "Created $(curb_logs_dir)"
+    log_success "Created $(curb_cache_dir)"
+
+    # Create config file with sensible defaults
+    log_info "Creating default configuration..."
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        log_warn "Config file already exists at ${CONFIG_FILE}"
+        log_warn "Skipping config creation (remove file to recreate)"
+    else
+        cat > "$CONFIG_FILE" <<'EOF'
+{
+  "harness": {
+    "default": "auto",
+    "priority": ["claude", "codex"]
+  },
+  "budget": {
+    "default": 1000000,
+    "warn_at": 0.8
+  },
+  "loop": {
+    "max_iterations": 100
+  },
+  "clean_state": {
+    "require_commit": true,
+    "require_tests": false
+  },
+  "hooks": {
+    "enabled": true
+  }
+}
+EOF
+        log_success "Created ${CONFIG_FILE}"
+    fi
+
+    # Create hook directories
+    log_info "Creating hook directories..."
+
+    HOOK_TYPES=("pre-loop" "pre-task" "post-task" "on-error" "post-loop")
+    for hook_type in "${HOOK_TYPES[@]}"; do
+        HOOK_DIR="${HOOKS_DIR}/${hook_type}.d"
+        if [[ ! -d "$HOOK_DIR" ]]; then
+            mkdir -p "$HOOK_DIR"
+            log_success "Created ${HOOK_DIR}"
+        else
+            log_warn "${HOOK_DIR} already exists"
+        fi
+    done
+
+    echo ""
+    log_success "Global curb configuration complete!"
+    echo ""
+    echo "Configuration:"
+    echo "  Config file:  ${CONFIG_FILE}"
+    echo "  Hooks:        ${HOOKS_DIR}"
+    echo "  Logs:         $(curb_logs_dir)"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Review and customize ${CONFIG_FILE}"
+    echo "  2. Add custom hooks to ${HOOKS_DIR}/<hook-type>.d/"
+    echo "  3. Initialize a project with: curb-init <project-dir>"
+    echo "  4. Start building: cd <project-dir> && curb"
+    echo ""
+    echo "Configuration options:"
+    echo "  harness.default       - Default harness to use (auto|claude|codex)"
+    echo "  harness.priority      - Order to try harnesses when auto"
+    echo "  budget.default        - Default token budget per run"
+    echo "  loop.max_iterations   - Maximum iterations before stopping"
+    echo "  clean_state.require_commit - Require harness to commit changes"
+    echo ""
+
+    exit 0
+fi
+
+# ============================================================================
+# Project initialization (default behavior)
+# ============================================================================
 
 # Get project name from directory
 PROJECT_NAME=$(basename "$(cd "$PROJECT_DIR" && pwd)")
