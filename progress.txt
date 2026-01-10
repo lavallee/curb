@@ -3035,3 +3035,32 @@ Completely reorganized and enhanced the --help output for the curb CLI tool:
 3. Organizing flags by category (Core, Reliability, Debug) makes it easier for users to find what they need
 4. Including "LEARN MORE" section with links to docs reduces support burden
 5. Concrete examples (e.g., 5000000 tokens) are more helpful than abstract descriptions
+
+## Task: curb-001 - Create lib/session.sh with animal wordlist
+
+### Approach
+- Created a new lib/session.sh file with animal names for session identification
+- Used a space-separated string approach for bash 3.2 compatibility on macOS
+- Implemented session_random_name() function that parses the string into an array at runtime
+
+### Implementation Notes
+- **Bash 3.2 Compatibility Issue**: Multi-line array declarations `declare -a ARRAY=(\n    "item" \n)` create empty first elements in bash 3.2
+- **Solution**: Store animals as a space-separated string, then parse into array within the function
+- **Array Construction**: `animals=($ANIMAL_NAMES)` performs word splitting at runtime, avoiding bash 3.2 array declaration bugs
+- **Total Animals**: Included 200 animal names (double the ~100 requirement)
+- **Dependencies**: Only bash builtins ($RANDOM, string expansion, basic arithmetic)
+
+### Key Learnings
+1. Bash 3.2 on macOS has quirks with array declarations - prefer string storage for compatibility
+2. Word splitting within function scope is safer than global array declarations
+3. All 341 existing BATS tests still pass after adding session.sh
+4. Random selection via $RANDOM % count works reliably and doesn't require /dev/urandom
+5. Simple, single-word animal names are ideal for memorable session IDs (e.g., "fox", "owl", not "flying-fox")
+
+### Files Modified
+- `lib/session.sh` (new) - Session identity module with 200-animal wordlist
+
+### Test Results
+- All 341 existing BATS tests pass
+- session_random_name() successfully returns valid animal names
+- Function tested across multiple invocations to verify randomness
