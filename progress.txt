@@ -4002,3 +4002,55 @@ Implemented five helper functions to support git workflow integration:
 These functions enable Phase 3 integration tasks:
 - curb-025: git_push_branch implementation
 - curb-026: Integration of git workflow into main loop
+
+## Session: Git Workflow Integration (curb-026)
+
+### Task: Integrate git workflow into main loop
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. Integrated git_init_run_branch in run_loop and run_iteration
+   - Calls git_init_run_branch after session_init
+   - Creates branch with naming convention: curb/{session_name}/{timestamp}
+   - Stores branch name in global variable for later use
+   - Gracefully skips if not in a git repository
+
+2. Integrated git_commit_task after successful task completion
+   - Called after artifacts are captured
+   - Only commits if exit_code == 0 (successful task)
+   - Only commits if in a git repository (git_in_repo check)
+   - Uses structured commit message format: [{task_id}] {task_title}
+   - Includes task summary and Task-ID trailer
+
+3. Graceful handling of non-git directories
+   - All git operations guarded by git_in_repo checks
+   - Logs debug messages when skipping git operations
+   - No errors or warnings in non-git directories
+
+### Test Results:
+- All 70 git.bats tests PASS
+- All 28 config.bats tests PASS
+- All 34 session.bats tests PASS
+- Verified graceful handling in non-git directories
+- Syntax validation with bash -n curb
+
+### Learnings:
+- **Git integration points**: The main loop has two entry points (run_loop and run_iteration), both need git branch initialization
+- **Idempotent initialization**: run_iteration checks if branch is already initialized before creating it (to avoid errors on subsequent iterations)
+- **Guard all git operations**: Use git_in_repo to guard all git operations for graceful non-git directory handling
+- **Commit after artifacts**: Git commit should happen after artifacts are captured to ensure diff is saved before committing
+- **Success-only commits**: Only commit if task was successful (exit_code == 0) to avoid committing broken states
+- **Session name for branch**: Using session_get_name() for the branch name provides consistency with session tracking
+
+### Integration Points:
+1. **run_loop** (line ~1700): After artifacts_init_run, before pre-loop hooks
+2. **run_iteration** (line ~1320): After artifacts_init_run, before task selection
+3. **run_iteration** (line ~1629): After artifacts_finalize_task, before return
+
+### Architecture Notes:
+- The git module maintains global state (_GIT_RUN_BRANCH) to track the current branch
+- Branch initialization is idempotent (can be called multiple times safely)
+- git_commit_task handles no-op cases (returns 0 if nothing to commit)
+- All git errors are logged as warnings, not errors (to allow continuation)
+
