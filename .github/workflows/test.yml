@@ -23,6 +23,19 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Debug environment
+        run: |
+          echo "Bash version: $BASH_VERSION"
+          bats --version
+          echo "Testing export -f:"
+          bash -c 'test_func() { echo "works"; }; export -f test_func; bash -c "test_func"'
+
+      - name: Debug hooks test
+        if: always()
+        run: |
+          echo "Running single hooks test with trace..."
+          bats --trace tests/hooks.bats 2>&1 | head -200 || true
+
       - name: Run tests
         run: bats tests/
 
