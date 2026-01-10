@@ -3589,3 +3589,30 @@ Both functions follow the established pattern:
 ✅ 'curb run --once' runs single iteration - Confirmed, routes to run_iteration()
 ✅ 'curb run --epic X' filters by epic - Confirmed, EPIC variable set and exported
 ✅ No behavior changes from previous implementation - Confirmed, legacy flags still work
+
+## Task: curb-014 (2026-01-10)
+
+### Context:
+Moved curb-init logic into cmd_init to consolidate CLI subcommands and reduce maintenance burden.
+
+### Key Learnings:
+- **Subcommand consolidation pattern**: Moving logic from standalone scripts into subcommand functions within the main script improves maintainability and reduces code duplication.
+- **Deprecation strategy**: Keeping the old script as a thin wrapper with a deprecation notice ensures backwards compatibility while guiding users to the new approach.
+- **Flag parsing in subcommands**: The --global flag is parsed at the subcommand level (cmd_init) rather than at the global level, allowing it to be specific to the init subcommand.
+- **XDG directory functions**: The curb_ensure_dirs, curb_config_dir, curb_logs_dir, and curb_cache_dir functions from lib/xdg.sh are available once xdg.sh is sourced at the top of the main script.
+- **Local variable scoping**: Using local variables (local global_init, local missing_deps, etc.) ensures proper scoping and avoids polluting the global namespace.
+
+### Implementation Details:
+- cmd_init() now contains all initialization logic from curb-init
+- Supports two modes:
+  1. Global initialization (curb init --global) - creates XDG directories and config
+  2. Project initialization (curb init [path]) - creates project structure and templates
+- curb-init is now a 23-line wrapper that shows deprecation notice and executes 'curb init "$@"'
+- All paths use CURB_DIR for templates and proper directory resolution
+- Array handling uses proper bash syntax (local missing_deps=()) compatible with bash 3.2
+
+### Acceptance Criteria Verification:
+✅ 'curb init' works for project initialization - Confirmed with /tmp test
+✅ 'curb init --global' works for global initialization - Confirmed with XDG_CONFIG_HOME override
+✅ curb-init still works but shows deprecation notice - Confirmed, shows yellow warning
+✅ All init functionality preserved - Confirmed, all files created properly
