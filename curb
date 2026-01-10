@@ -552,15 +552,14 @@ cmd_artifacts() {
     case "$subcommand" in
         list)
             # List all runs with artifacts
-            local curb_dir
-            curb_dir=$(artifacts_get_curb_dir)
-            if [[ ! -d "$curb_dir/runs" ]]; then
+            local artifacts_base=".curb/runs"
+            if [[ ! -d "$artifacts_base" ]]; then
                 log_info "No artifacts found"
                 return 0
             fi
 
             log_info "Available runs:"
-            for run_dir in "$curb_dir/runs"/*; do
+            for run_dir in "$artifacts_base"/*; do
                 if [[ -d "$run_dir" && -f "$run_dir/run.json" ]]; then
                     local run_name=$(basename "$run_dir")
                     local start_time=$(jq -r '.started_at // "unknown"' "$run_dir/run.json")
@@ -575,9 +574,8 @@ cmd_artifacts() {
                 return 1
             fi
 
-            local curb_dir
-            curb_dir=$(artifacts_get_curb_dir)
-            local run_dir="$curb_dir/runs/$run_id"
+            local artifacts_base=".curb/runs"
+            local run_dir="$artifacts_base/$run_id"
 
             if [[ ! -d "$run_dir" ]]; then
                 _log_error_console "Run not found: ${run_id}"
