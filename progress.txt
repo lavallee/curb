@@ -1074,3 +1074,116 @@ Test runner integration is complete. Next tasks in reliability phase:
 2. Add budget enforcement to main loop (curb-rvl)
 3. Add budget warning at threshold (curb-iji)
 
+## Session 16: Clean State Check Integration (curb-vdw)
+
+### Task: Integrate clean state check into main loop
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. **Sourced lib/state.sh** in curb main script
+   - Added source line after lib/logger.sh
+   - Makes state verification functions available to main loop
+   - Follows same pattern as other library sourcing
+
+2. **Integrated state_ensure_clean after harness invocation**
+   - Called after successful harness run (exit_code=0)
+   - Skipped if harness already failed (no need to check state after failure)
+   - Sets exit_code=1 if state check fails
+   - Logs debug messages for visibility
+
+3. **Integrated state_run_tests after state check**
+   - Called only if state check passes (exit_code still 0)
+   - Sets exit_code=1 if tests fail
+   - Respects clean_state.require_tests config setting
+   - Auto-detects test runner from project
+
+4. **Added --require-clean and --no-require-clean CLI flags**
+   - New REQUIRE_CLEAN variable initialized from CURB_REQUIRE_CLEAN env var
+   - Flags set REQUIRE_CLEAN and export CURB_REQUIRE_CLEAN
+   - --require-clean forces strict mode (fail on uncommitted changes)
+   - --no-require-clean disables check (allow uncommitted changes)
+   - Documented in --help output
+
+5. **Updated state_ensure_clean to accept override parameter**
+   - Added optional $1 parameter for override value ("true" or "false")
+   - If override provided, uses it instead of config value
+   - Maintains backward compatibility (empty/missing param uses config)
+   - Updated documentation with parameter details and examples
+
+### Test Results:
+- All 263 BATS tests PASS
+- No regressions in existing functionality
+- State integration works correctly
+
+### Learnings:
+
+- **Integration point selection**: State checks should run ONLY after successful harness run
+  - If harness exits with non-zero code, skip state checks
+  - Harness failure is already an error - don't compound it
+  - This pattern keeps error handling clean and focused
+  - Pattern: `if exit_code == 0: check_state(); check_tests(); fi`
+
+- **Sequential state verification**: State checks must run in specific order
+  1. First check: uncommitted changes (state_ensure_clean)
+  2. Second check: tests pass (state_run_tests)
+  - Don't run tests if state is dirty (tests might fail due to uncommitted changes)
+  - Exit early pattern prevents cascading checks when first one fails
+  - Each check updates exit_code if it fails
+
+- **CLI flag override pattern**: Override parameters should be optional
+  - Empty string means "use config default"
+  - Non-empty string overrides config
+  - Pattern: `if [[ -n "$override" ]]; then use_override; else use_config; fi`
+  - Makes function backward compatible with existing callers
+
+- **Flag naming convention**: Use positive and negative forms for boolean overrides
+  - --require-clean (enable enforcement)
+  - --no-require-clean (disable enforcement)
+  - Follows common CLI patterns (e.g., --color / --no-color)
+  - Makes intent explicit in command line
+
+- **Help text organization**: Group related flags together
+  - Put state-related flags near other reliability flags
+  - Add brief description of what each flag does
+  - Keep descriptions concise but informative
+  - Follow existing help text style
+
+- **Error propagation pattern**: Set exit_code but don't return immediately
+  - Pattern: Set exit_code=1, then continue to final return statement
+  - Allows cleanup or final logging before returning
+  - Single return point makes control flow clearer
+  - Example: `if ! check; then exit_code=1; else ...; fi; return $exit_code`
+
+- **Debug logging for state checks**: Add log_debug calls around checks
+  - "Checking repository state..." before check
+  - "Repository state is clean" on success
+  - "State check failed: uncommitted changes detected" on failure
+  - Helps debug when running with --debug flag
+  - Provides visibility into what curb is doing
+
+### Implementation Details:
+- lib/state.sh sourced at line 32 in curb script
+- State checks added in run_iteration() function after harness invocation
+- REQUIRE_CLEAN variable added at top of curb script (line 66)
+- Flag parsing added in main() function (lines 583-590)
+- state_ensure_clean parameter added (optional $1 override)
+- Help text updated with new flags (lines 798-799)
+
+### Acceptance Criteria Met:
+✓ Uncommitted changes detected after harness run
+✓ Loop aborts if require_commit and changes exist
+✓ Tests run if configured
+✓ Behavior overridable with CLI flag
+
+### Files Modified:
+- `curb` - Main script: sourced lib/state.sh, added state checks after harness, added CLI flags
+- `lib/state.sh` - Updated state_ensure_clean to accept override parameter
+- `.beads/issues.jsonl` - Task closed
+- `progress.txt` - This entry
+
+### Next Steps:
+Clean state integration is complete. Ready for budget enforcement tasks:
+1. Add budget enforcement to main loop (curb-rvl)
+2. Add budget warning at threshold (curb-iji)
+
