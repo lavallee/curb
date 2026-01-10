@@ -520,3 +520,91 @@ Global onboarding is complete. Users can now:
 2. Customize config file and add hooks
 3. Initialize projects with `curb-init <project-dir>`
 4. Start using curb with confidence that global config is properly set up
+
+## Session 9: Phase 1 Checkpoint Validation (curb-hp9)
+
+### Task: Checkpoint: Config and Logging Complete
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was validated:
+Phase 1 is complete. All configuration and logging features are working correctly:
+
+1. **Global Config**: `curb init --global` command
+   - Creates `~/.config/curb/config.json` with sensible defaults
+   - Creates XDG directory structure (config, logs, cache)
+   - Creates hook directories (pre-loop.d, pre-task.d, post-task.d, on-error.d, post-loop.d)
+   - Idempotent: can be run multiple times safely
+   - Checks dependencies (jq, harnesses)
+
+2. **Project Config Override**: `.curb.json` file in project root
+   - Project config properly overrides global config values
+   - Tested with budget.default (500000 overriding 1000000)
+   - Tested with loop.max_iterations (50 overriding 100)
+   - Non-overridden values fall back to global config (harness.default: "auto")
+   - Config precedence: env vars > project > global > defaults
+
+3. **Structured Logging**: JSONL logs after each run
+   - Logs created at `~/.local/share/curb/logs/{project}/{session}.jsonl`
+   - Session ID format: `YYYYMMDD-HHMMSS` (e.g., "20260109-214858")
+   - Log entries contain: timestamp (ISO 8601), event_type, and data
+   - Event types: task_start, task_end, error
+   - Logs are append-only and preserve complete execution history
+
+4. **Log Querying with jq**:
+   - Logs are queryable: `jq 'select(.event_type=="task_start")' logs/*.jsonl`
+   - Each event has proper structure for filtering and analysis
+   - task_start includes: task_id, task_title, harness
+   - task_end includes: exit_code, duration, tokens_used, git_sha
+   - error events include: message, context
+
+### Validation Results:
+- All 189 BATS tests PASS
+- Manual testing confirmed all features working correctly
+- Config schema is intuitive and well-documented
+- Logs capture all necessary metadata for debugging and analysis
+- All settings that need to be configurable are in config.json
+
+### Learnings:
+- **Checkpoint tasks are for validation, not implementation**: This task was purely about validating that previous work is complete and functioning correctly
+  - Run manual tests to verify user-facing features
+  - Check that integration between components works
+  - Ensure documentation matches implementation
+  - Validate acceptance criteria before closing
+
+- **Config file location**: Project config is `.curb.json` (not `.curb/config.json`)
+  - This follows the dotfile convention for project-specific config
+  - The `.curb/` directory is used by beads for task tracking
+  - Global config is at `~/.config/curb/config.json` (follows XDG spec)
+
+- **Testing config merging**: Use bash to source libraries and test
+  - Source dependencies in order: xdg.sh before config.sh
+  - Call config_load, then use config_get to verify values
+  - Test both override and fallback scenarios
+
+- **Beads task management**: This project uses `bd` CLI instead of prd.json
+  - `bd close <id> -r "reason"` to close tasks
+  - `bd list --status <status>` to query tasks by status
+  - Task status appears in `.beads/issues.jsonl`
+
+- **Phase 1 is complete**: All foundational features ready
+  - Global and project configuration working
+  - Structured logging with metadata
+  - Onboarding experience via `curb init --global`
+  - Ready to proceed to Phase 2: Reliability features
+
+### Questions Answered:
+**Q: Is the config schema intuitive?**
+A: Yes. Nested JSON with dot-notation access (e.g., "harness.default", "budget.warn_at") is clear and follows common patterns from other tools.
+
+**Q: Are the logs capturing the right metadata?**
+A: Yes. Logs include timestamps, event types, task IDs, durations, exit codes, git SHAs, and error context. This provides complete traceability for debugging.
+
+**Q: Any settings that should be configurable but aren't?**
+A: Current config covers all essential settings. Future phases may add hook-specific config and additional harness options.
+
+### Next Steps:
+Phase 1 validation complete. Ready to proceed to Phase 2: Reliability
+- Clean state verification (require commits, optional test runs)
+- Budget tracking and enforcement
+- Budget warnings at threshold
