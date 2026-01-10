@@ -569,63 +569,67 @@ cmd_explain() {
 
 # Artifacts subcommand - manage artifacts
 cmd_artifacts() {
-    local subcommand="${1:-list}"
-    shift || true
+    local artifacts_base=".curb/runs"
 
-    case "$subcommand" in
-        list)
-            # List all runs with artifacts
-            local artifacts_base=".curb/runs"
-            if [[ ! -d "$artifacts_base" ]]; then
-                log_info "No artifacts found"
-                return 0
+    # If no arguments given, list recent tasks with paths
+    if [[ $# -eq 0 ]]; then
+        if [[ ! -d "$artifacts_base" ]]; then
+            log_info "No artifacts found"
+            return 0
+        fi
+
+        log_info "Recent tasks:"
+        # Find all task directories, sort by modification time (newest first)
+        find "$artifacts_base" -maxdepth 3 -type d -name "curb-*" | sort -r | while read -r task_dir; do
+            if [[ -f "$task_dir/task.json" ]]; then
+                local task_id=$(basename "$task_dir")
+                echo "  ${task_id}: ${task_dir}"
             fi
+        done
+        return 0
+    fi
 
-            log_info "Available runs:"
-            for run_dir in "$artifacts_base"/*; do
-                if [[ -d "$run_dir" && -f "$run_dir/run.json" ]]; then
-                    local run_name=$(basename "$run_dir")
-                    local start_time=$(jq -r '.started_at // "unknown"' "$run_dir/run.json")
-                    echo "  ${run_name} (started: ${start_time})"
-                fi
-            done
-            ;;
-        show)
-            local run_id="$1"
-            if [[ -z "$run_id" ]]; then
-                _log_error_console "Usage: curb artifacts show <run-id>"
-                return 1
+    # Find a task by task_id (supports prefix matching)
+    local search_id="$1"
+    local artifacts_base=".curb/runs"
+
+    if [[ ! -d "$artifacts_base" ]]; then
+        _log_error_console "No artifacts found (no runs yet)"
+        return 1
+    fi
+
+    # Search for matching task_id across all runs
+    # Support both exact and prefix matches
+    local matches=()
+    while IFS= read -r task_dir; do
+        if [[ -f "$task_dir/task.json" ]]; then
+            local task_id=$(basename "$task_dir")
+            # Check for exact match first, or prefix match
+            if [[ "$task_id" == "$search_id" ]] || [[ "$task_id" == "$search_id"* ]]; then
+                matches+=("$task_dir")
             fi
+        fi
+    done < <(find "$artifacts_base" -maxdepth 3 -type d -name "curb-*" 2>/dev/null)
 
-            local artifacts_base=".curb/runs"
-            local run_dir="$artifacts_base/$run_id"
+    if [[ ${#matches[@]} -eq 0 ]]; then
+        _log_error_console "Task not found: ${search_id}"
+        _log_error_console "Tip: Run 'curb artifacts' to see available tasks"
+        return 1
+    fi
 
-            if [[ ! -d "$run_dir" ]]; then
-                _log_error_console "Run not found: ${run_id}"
-                return 1
-            fi
+    if [[ ${#matches[@]} -eq 1 ]]; then
+        # Single match - print the path
+        echo "${matches[0]}"
+        return 0
+    fi
 
-            log_info "Run: ${run_id}"
-            if [[ -f "$run_dir/run.json" ]]; then
-                jq -r '"Started: \(.started_at)\nStatus: \(.status // "unknown")"' "$run_dir/run.json"
-            fi
-
-            echo ""
-            log_info "Tasks:"
-            for task_dir in "$run_dir/tasks"/*; do
-                if [[ -d "$task_dir" && -f "$task_dir/task.json" ]]; then
-                    local task_id=$(basename "$task_dir")
-                    local task_status=$(jq -r '.status // "unknown"' "$task_dir/task.json")
-                    echo "  ${task_id}: ${task_status}"
-                fi
-            done
-            ;;
-        *)
-            _log_error_console "Unknown artifacts subcommand: ${subcommand}"
-            _log_error_console "Available: list, show <run-id>"
-            return 1
-            ;;
-    esac
+    # Multiple matches - show them and ask user to be more specific
+    _log_error_console "Ambiguous task ID '${search_id}' matches ${#matches[@]} tasks:"
+    for match in "${matches[@]}"; do
+        _log_error_console "  $(basename "$match"): ${match}"
+    done
+    _log_error_console "Please use a more specific prefix"
+    return 1
 }
 
 # Colors for output
