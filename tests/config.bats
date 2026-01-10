@@ -273,3 +273,63 @@ teardown() {
     result=$(config_get_or "nonexistent" "fallback")
     [[ "$result" == "fallback" ]]
 }
+
+# ============================================================================
+# Environment variable override tests
+# ============================================================================
+
+@test "CURB_BUDGET env var overrides config budget" {
+    echo '{"budget": {"default": 100}}' > "$TEST_CONFIG_DIR/config.json"
+
+    # Set CURB_BUDGET environment variable
+    export CURB_BUDGET=500
+    config_clear_cache
+
+    result=$(config_get "budget.default")
+    [[ "$result" == "500" ]]
+
+    # Clean up
+    unset CURB_BUDGET
+}
+
+@test "CURB_BUDGET env var overrides project config budget" {
+    echo '{"budget": {"default": 100}}' > "$TEST_CONFIG_DIR/config.json"
+
+    cd "$TEST_PROJECT_DIR"
+    echo '{"budget": {"default": 200}}' > ./.curb.json
+
+    # Set CURB_BUDGET environment variable (should have highest priority)
+    export CURB_BUDGET=500
+    config_clear_cache
+
+    result=$(config_get "budget.default")
+    [[ "$result" == "500" ]]
+
+    # Clean up
+    unset CURB_BUDGET
+}
+
+@test "CURB_BUDGET env var creates budget structure if not present" {
+    echo '{}' > "$TEST_CONFIG_DIR/config.json"
+
+    # Set CURB_BUDGET environment variable
+    export CURB_BUDGET=300
+    config_clear_cache
+
+    result=$(config_get "budget.default")
+    [[ "$result" == "300" ]]
+
+    # Clean up
+    unset CURB_BUDGET
+}
+
+@test "config without CURB_BUDGET env var uses file values" {
+    echo '{"budget": {"default": 100}}' > "$TEST_CONFIG_DIR/config.json"
+
+    # Ensure CURB_BUDGET is not set
+    unset CURB_BUDGET
+    config_clear_cache
+
+    result=$(config_get "budget.default")
+    [[ "$result" == "100" ]]
+}

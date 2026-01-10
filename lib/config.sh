@@ -31,7 +31,7 @@ fi
 trap 'rm -f "$_CONFIG_CACHE_FILE" 2>/dev/null' EXIT
 
 # Load and merge configuration files
-# Merges configs in priority order: project > user > defaults
+# Merges configs in priority order: env vars > project > user > defaults
 # Returns: 0 on success, 1 if no configs found
 config_load() {
     local project_config="./.curb.json"
@@ -56,6 +56,16 @@ config_load() {
         if [[ $? -ne 0 ]]; then
             echo "Warning: Failed to parse project config at $project_config" >&2
             # Keep the user config if project config failed
+        fi
+    fi
+
+    # Apply environment variable overrides (highest priority)
+    # CURB_BUDGET overrides budget.default
+    if [[ -n "${CURB_BUDGET:-}" ]]; then
+        merged_config=$(echo "$merged_config" | jq --argjson budget "$CURB_BUDGET" '.budget.default = $budget' 2>/dev/null)
+        if [[ $? -ne 0 ]]; then
+            # If jq fails (e.g., invalid JSON), try creating the structure
+            merged_config=$(echo "$merged_config" | jq --argjson budget "$CURB_BUDGET" '. + {budget: {default: $budget}}' 2>/dev/null)
         fi
     fi
 
