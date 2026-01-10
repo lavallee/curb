@@ -1697,3 +1697,129 @@ Hooks framework is complete. Future integration tasks:
 - Maintains backward compatibility with all existing hooks_run() usage
 - Ready to support future features that need hook introspection
 
+
+## Session: Hook Points Integration (curb-ffn)
+
+### Task: Implement 5 hook points in main loop
+- **Status**: COMPLETED
+- **Date**: 2026-01-10
+
+### What was implemented:
+1. **Sourced lib/hooks.sh** in main curb script
+   - Added source line after lib/budget.sh (line 37)
+   - Makes hooks framework available to main loop
+   - Follows same pattern as other library sourcing
+
+2. **Pre-loop hook** in run_loop() function
+   - Runs after logger initialization, before first iteration
+   - Uses hooks_set_session_context() to export SESSION_ID and HARNESS
+   - Called with hooks_run "pre-loop"
+   - Provides opportunity for setup scripts (e.g., notify team, check environment)
+
+3. **Pre-task hook** in run_iteration() function
+   - Runs after log_task_start, before harness invocation
+   - Uses hooks_set_task_context() to export TASK_ID and TASK_TITLE
+   - Called with hooks_run "pre-task"
+   - Allows hooks to inspect task details before execution
+
+4. **Post-task hook** in run_iteration() function
+   - Runs at end of function, always executes (success or failure)
+   - Uses hooks_set_task_context() with EXIT_CODE
+   - Called with hooks_run "post-task"
+   - Enables cleanup, notifications, or metrics collection
+
+5. **On-error hook** in run_iteration() function
+   - Runs only when harness exits with non-zero code
+   - Uses hooks_set_task_context() with EXIT_CODE
+   - Called with hooks_run "on-error"
+   - Specialized hook for error handling (alerts, rollback, logging)
+
+6. **Post-loop hook** in run_loop() function
+   - Added at all three loop exit points:
+     - When all tasks complete (line 591)
+     - When budget exceeded (line 619)
+     - When max iterations reached (line 635)
+   - Called with hooks_run "post-loop"
+   - Final cleanup, reporting, or notification opportunity
+
+### Test Results:
+- All 301 BATS tests continue to PASS
+- No regressions in existing functionality
+- Hook framework fully integrated with main loop
+- All 5 hook points fire at correct lifecycle moments
+
+### Learnings:
+
+- **Hook execution order matters**: Pre-task runs before harness, post-task always runs after
+  - Pre-task: After log_task_start, before harness_invoke
+  - On-error: Only when exit_code != 0, before post-task
+  - Post-task: Always runs at end, regardless of success/failure
+  - This ensures post-task can do cleanup even if on-error ran
+
+- **Multiple exit points require multiple hook calls**: Loop has 3 exit scenarios
+  - Success: All tasks complete
+  - Budget: Token limit exceeded
+  - Timeout: Max iterations reached
+  - Post-loop hooks must be called at each exit point for consistency
+
+- **Context setting before hook execution**: Use helper functions consistently
+  - hooks_set_session_context() for pre-loop and post-loop
+  - hooks_set_task_context() for pre-task, post-task, on-error
+  - Context variables exported to environment for hook scripts
+  - Pattern: set context, then immediately call hooks_run
+
+- **Debug logging for visibility**: Add log_debug calls around each hook invocation
+  - "Running pre-task hooks..." before execution
+  - "Pre-task hooks complete" after execution
+  - Helps users understand what's happening when --debug flag used
+  - Makes troubleshooting hook issues easier
+
+- **Hook failures are non-blocking by default**: Main loop continues even if hooks fail
+  - Controlled by hooks.fail_fast config (defaults to false)
+  - Failures logged to stderr for visibility
+  - Prevents hooks from breaking autonomous operation
+  - Users can opt-in to strict mode if desired
+
+- **Integration point selection is strategic**: Hooks placed at natural boundaries
+  - Pre-loop: After initialization, before work starts
+  - Pre-task: After task selection, before execution
+  - Post-task: After all task work, before returning
+  - On-error: After error detected, before post-task
+  - Post-loop: After loop decision made, before exit
+
+### Context Variables Available to Hooks:
+- **All hooks**: CURB_HOOK_NAME, CURB_PROJECT_DIR
+- **Pre-loop, Post-loop**: CURB_SESSION_ID, CURB_HARNESS
+- **Pre-task**: CURB_TASK_ID, CURB_TASK_TITLE
+- **Post-task, On-error**: CURB_TASK_ID, CURB_TASK_TITLE, CURB_EXIT_CODE
+
+### Implementation Details:
+- Hooks sourced at line 37 in curb script
+- Pre-loop hook: run_loop() lines 570-573
+- Post-loop hook: run_loop() lines 590-592, 618-620, 634-636
+- Pre-task hook: run_iteration() lines 385-389
+- On-error hook: run_iteration() lines 482-486
+- Post-task hook: run_iteration() lines 511-515
+- Total additions: 39 lines (hook calls + debug logging)
+
+### Acceptance Criteria Met:
+✓ All 5 hook points fire at correct times
+✓ Context variables available to scripts via environment
+✓ on-error only fires on actual errors (exit_code != 0)
+✓ Hooks can be disabled via hooks.enabled config
+
+### Files Modified:
+- curb: Added lib/hooks.sh source, integrated 5 hook points
+- .beads/issues.jsonl: Task closed
+
+### Next Steps:
+Hook integration is complete. Users can now:
+1. Create hook scripts in ~/.config/curb/hooks/{hook-name}.d/
+2. Create project-specific hooks in ./.curb/hooks/{hook-name}.d/
+3. Use hooks for notifications, metrics, validation, cleanup, etc.
+4. Control hook behavior via hooks.enabled and hooks.fail_fast config
+
+Future enhancements could include:
+- Example hook scripts in templates/hooks/
+- Documentation for common hook use cases
+- Hook execution metrics in logs
