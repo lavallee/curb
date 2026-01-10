@@ -14,6 +14,10 @@ Combines the [Ralph Wiggum technique](https://ghuntley.com/ralph/) (running an A
 - **Autonomous Loop**: Runs until all tasks are complete
 - **Dependency Tracking**: Respects task dependencies, picks ready tasks
 - **Priority Scheduling**: P0-P4 priority-based task selection
+- **Epic/Label Filtering**: Target specific epics or labeled tasks
+- **Per-Task Model Selection**: Tasks with `model:X` labels auto-select the model
+- **Structured Logging**: JSONL logs with timestamps, durations, and git SHAs
+- **Global + Project Config**: XDG-compliant configuration with overrides
 - **Planning Mode**: Analyze codebase and generate fix plans
 - **Streaming Output**: Watch agent activity in real-time
 - **Migration Tools**: Convert between prd.json and beads formats
@@ -45,11 +49,14 @@ ln -s ~/tools/curb/curb-init /usr/local/bin/curb-init
 ## Quick Start
 
 ```bash
+# First-time setup (creates global config and directories)
+curb-init --global
+
 # Initialize a new project
 cd my-project
 curb-init
 
-# Edit prd.json with your tasks
+# Edit prd.json with your tasks (or use beads: bd init && bd create "Task")
 # Add specifications to specs/
 # Update AGENT.md with build instructions
 
@@ -58,6 +65,12 @@ curb --status
 
 # Run the autonomous loop
 curb
+
+# Or target a specific epic
+curb --epic my-epic-id
+
+# Or filter by label
+curb --label phase-1
 ```
 
 ## Usage
@@ -70,9 +83,18 @@ curb --status     # Show current task status
 curb --ready      # Show ready (unblocked) tasks
 curb --plan       # Run planning mode
 
+# Filtering (works with beads or JSON backend)
+curb --epic <id>      # Target tasks within a specific epic
+curb --label <name>   # Target tasks with a specific label
+curb --epic curb-1gq --label phase-1  # Combine filters
+
 # Harness selection
 curb --harness claude    # Use Claude Code (default)
 curb --harness codex     # Use OpenAI Codex CLI
+
+# Backend selection
+curb --backend beads     # Force beads backend
+curb --backend json      # Force JSON backend
 
 # Output modes
 curb --stream     # Stream harness activity in real-time
@@ -159,7 +181,30 @@ curb --status  # Uses beads backend automatically
 | `status` | `open`, `in_progress`, `closed` |
 | `dependsOn` | Array of task IDs that must be closed first |
 | `parent` | (Optional) Parent epic ID |
+| `labels` | (Optional) Array of labels for filtering and model selection |
 | `notes` | Agent-maintained notes |
+
+### Per-Task Model Selection
+
+Tasks can specify which Claude model to use via a `model:` label:
+
+```bash
+# In beads:
+bd label add curb-abc model:haiku     # Use fast model for simple tasks
+bd label add curb-xyz model:sonnet    # Use balanced model for complex tasks
+bd label add curb-123 model:opus-4.5  # Use most capable model for hard tasks
+```
+
+In JSON backend, add labels to the task:
+```json
+{
+  "id": "prd-abc",
+  "title": "Quick fix",
+  "labels": ["model:haiku", "phase-1"]
+}
+```
+
+When curb picks up a task with a `model:` label, it automatically sets `CURB_MODEL` to pass to the Claude harness.
 
 ### Task Selection Algorithm
 
@@ -207,9 +252,111 @@ By default, curb auto-detects available harnesses:
 | `CURB_DEBUG` | `false` | Enable debug mode |
 | `CURB_STREAM` | `false` | Enable streaming output |
 | `CURB_BACKEND` | `auto` | Task backend: `auto`, `beads`, `json` |
+| `CURB_EPIC` | | Filter to tasks within this epic ID |
+| `CURB_LABEL` | | Filter to tasks with this label |
+| `CURB_MODEL` | | Override model for Claude harness |
+| `CURB_BUDGET` | | Override token budget (overrides config) |
 | `HARNESS` | `auto` | AI harness: `auto`, `claude`, `codex` |
 | `CLAUDE_FLAGS` | | Extra flags for Claude Code |
 | `CODEX_FLAGS` | | Extra flags for Codex CLI |
+
+## Configuration
+
+Curb uses XDG-compliant configuration with global and project-level overrides.
+
+### Global Setup
+
+```bash
+curb-init --global
+```
+
+Creates:
+- `~/.config/curb/config.json` - Global configuration
+- `~/.config/curb/hooks/` - Hook directories
+- `~/.local/share/curb/logs/` - Log storage
+- `~/.cache/curb/` - Cache directory
+
+### Configuration Precedence
+
+1. **CLI flags** (highest priority)
+2. **Environment variables**
+3. **Project config** (`.curb.json` in project root)
+4. **Global config** (`~/.config/curb/config.json`)
+5. **Hardcoded defaults** (lowest priority)
+
+### Config File Format
+
+```json
+{
+  "harness": {
+    "default": "auto",
+    "priority": ["claude", "codex"]
+  },
+  "budget": {
+    "default": 1000000,
+    "warn_at": 0.8
+  },
+  "loop": {
+    "max_iterations": 100
+  },
+  "clean_state": {
+    "require_commit": true,
+    "require_tests": false
+  },
+  "hooks": {
+    "enabled": true
+  }
+}
+```
+
+### Project Override
+
+Create `.curb.json` in your project root to override global settings:
+
+```json
+{
+  "budget": {
+    "default": 500000
+  },
+  "loop": {
+    "max_iterations": 50
+  }
+}
+```
+
+## Structured Logging
+
+Curb logs all task executions in JSONL format for debugging and analytics.
+
+### Log Location
+
+```
+~/.local/share/curb/logs/{project}/{session}.jsonl
+```
+
+Session ID format: `YYYYMMDD-HHMMSS` (e.g., `20260109-214858`)
+
+### Log Events
+
+Each task produces structured events:
+
+```json
+{"timestamp":"2026-01-09T21:48:58Z","event_type":"task_start","data":{"task_id":"curb-abc","task_title":"Fix bug","harness":"claude"}}
+{"timestamp":"2026-01-09T21:52:30Z","event_type":"task_end","data":{"task_id":"curb-abc","exit_code":0,"duration":212,"tokens_used":0,"git_sha":"abc123..."}}
+```
+
+### Querying Logs
+
+```bash
+# Find all task starts
+jq 'select(.event_type=="task_start")' ~/.local/share/curb/logs/myproject/*.jsonl
+
+# Find failed tasks
+jq 'select(.event_type=="task_end" and .data.exit_code != 0)' logs/*.jsonl
+
+# Calculate total duration
+jq -s '[.[].data.duration // 0] | add' logs/*.jsonl
+```
 
 ## How It Works
 
@@ -340,9 +487,13 @@ curb                      # Restart loop
 | File | Purpose |
 |------|---------|
 | `curb` | Main script - the autonomous loop |
-| `curb-init` | Project initialization |
+| `curb-init` | Project and global initialization |
 | `lib/harness.sh` | AI harness abstraction (claude/codex) |
 | `lib/tasks.sh` | Task backend abstraction (beads/json) |
+| `lib/beads.sh` | Beads CLI wrapper functions |
+| `lib/xdg.sh` | XDG Base Directory helpers |
+| `lib/config.sh` | Configuration loading and merging |
+| `lib/logger.sh` | Structured JSONL logging |
 | `templates/PROMPT.md` | Default system prompt |
 | `templates/AGENT.md` | Default agent instructions |
 

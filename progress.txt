@@ -1,0 +1,674 @@
+# Curb Development Progress
+
+## Session 1: XDG Directory Structure Implementation (curb-iwv)
+
+### Task: Create XDG directory structure and helpers
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Created `lib/xdg.sh` with full XDG Base Directory Specification compliance
+   - `xdg_config_home()` - Returns ~/.config or $XDG_CONFIG_HOME
+   - `xdg_data_home()` - Returns ~/.local/share or $XDG_DATA_HOME
+   - `xdg_cache_home()` - Returns ~/.cache or $XDG_CACHE_HOME
+   - `curb_ensure_dirs()` - Creates standard curb directories
+   - Helper functions for curb-specific directory paths
+
+2. Updated main `curb` script to source the new xdg.sh library
+
+3. Created comprehensive test suite in `tests/xdg.bats`
+   - 14 tests covering all XDG functions
+   - Tests for default behavior and environment variable overrides
+   - Tests for directory creation
+
+### Test Results:
+- All 14 XDG-specific tests PASS
+- All 101 existing tests continue to PASS
+- Total: 115 tests passing
+
+### Learnings:
+- BATS test framework uses `load test_helper` to source common setup
+- Tests should use `PROJECT_ROOT` (set by test_helper) rather than `CURB_DIR`
+- Test temp directories should use `${BATS_TMPDIR}` for isolation
+- All functions in bash libraries should have clear comments explaining behavior
+- XDG spec provides good standard for directory structure
+
+### Dependencies & Next Tasks:
+- curb-iwv is now complete and unblocks:
+  - curb-et7: Implement logger.sh (depends on xdg.sh)
+  - curb-1l6: Implement config.sh (depends on xdg.sh)
+
+## Session 2: Config Interface Implementation (curb-1l6)
+
+### Task: Implement config.sh with config_get interface
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was verified:
+1. Found `lib/config.sh` already implemented with full functionality
+   - `config_load()` - Reads and merges config files (project overrides user)
+   - `config_get(key)` - Extracts values using jq with dot-notation
+   - `config_get_or(key, default)` - Provides fallback defaults
+   - `config_clear_cache()` - Clears cache for testing
+   - `config_dump()` - Returns full cached config for debugging
+
+2. Verified comprehensive test suite in `tests/config.bats`
+   - 24 tests covering all config functions
+   - Tests for basic get operations, merging, caching, and edge cases
+   - All acceptance criteria tests passing
+
+### Test Results:
+- All 24 config-specific tests PASS
+- All 115 existing tests continue to PASS
+- Total: 139 tests passing
+
+### Learnings:
+- **File-based caching is essential for bash**: Used `_CONFIG_CACHE_FILE` instead of variable because bash command substitution `$(func)` creates subshells, which don't preserve variable modifications
+- **Exit codes matter**: `config_get` returns exit code 1 when key not found, enabling `config_get_or` to detect missing values
+- **jq type handling**: Different jq flags needed for different value types:
+  - `-r` (raw) for strings to remove JSON quotes
+  - `-c` (compact) for arrays/objects to preserve JSON structure
+  - Default (no flag) to detect type first, then choose appropriate extraction
+- **Test isolation**: Each BATS test gets its own temp directory via `${BATS_TMPDIR}`, and we override `curb_config_dir()` to point to test directory
+- **XDG integration**: Config module sources `xdg.sh` to find config directory at `$(curb_config_dir)/config.json`
+- **Beads CLI**: This project uses `bd` (beads) for task management instead of prd.json:
+  - Tasks stored in `.beads/issues.jsonl`
+  - Use `bd close <id> -r "reason"` to close tasks
+  - Use `bd list --status <status>` to query tasks
+
+### Implementation Details:
+- Config precedence: project (`./.curb.json`) > user (`~/.config/curb/config.json`)
+- Invalid JSON handled gracefully with warnings to stderr
+- Null values treated as missing (return exit code 1)
+- Cache persists across function calls within same shell session
+- Trap ensures cache file cleanup on exit
+
+### Task Already Complete:
+The implementation was already present in the repository and working correctly. The task status was "in_progress" but all code and tests were complete. This session primarily involved:
+1. Verifying the implementation against specifications
+2. Running comprehensive test suite
+3. Closing the task in beads system
+
+## Session 3: Environment Variable Override Support (curb-0u2)
+
+### Task: Add config file loading with global + project merge
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Enhanced `config_load()` in `lib/config.sh` to support environment variable overrides
+   - Added CURB_BUDGET environment variable support
+   - Environment variables now have highest precedence in config merging
+   - Used jq's `--argjson` to safely inject numeric values
+   - Handles missing budget structure gracefully (creates if needed)
+
+2. Added comprehensive test coverage in `tests/config.bats`
+   - Test: CURB_BUDGET env var overrides config budget
+   - Test: CURB_BUDGET env var overrides project config budget
+   - Test: CURB_BUDGET env var creates budget structure if not present
+   - Test: Config without CURB_BUDGET env var uses file values
+
+### Test Results:
+- All 4 new environment variable tests PASS
+- All 139 existing tests continue to PASS
+- Total: 143 tests passing
+
+### Learnings:
+- **Config precedence hierarchy**: CLI flags > env vars > project config > global config
+  - Config module handles: env vars > project > global
+  - Main script (`curb`) handles CLI flags
+- **jq numeric handling**: Use `--argjson` instead of `--arg` for numeric values
+  - `--arg` treats everything as strings (would quote the number)
+  - `--argjson` parses the value as JSON (numbers stay numeric)
+- **Graceful structure creation**: When env var sets a nested value, use jq to create structure if missing
+  - First try: `.budget.default = $budget` (updates existing)
+  - Fallback: `. + {budget: {default: $budget}}` (creates structure)
+- **Environment variable naming**: Follow existing CURB_* convention
+  - Consistent with CURB_BACKEND, CURB_DEBUG, CURB_MODEL, etc.
+  - Makes it easy to discover available env vars
+
+### Implementation Details:
+- Updated config precedence from "project > user" to "env vars > project > user"
+- CURB_BUDGET is the first env var override implemented
+- Pattern is extensible for other env vars (CURB_HARNESS, CURB_MAX_ITERATIONS, etc.)
+- All acceptance criteria met:
+  ✓ Global config alone works
+  ✓ Project config overrides global values
+  ✓ Missing config files handled gracefully (empty default)
+  ✓ CURB_BUDGET env var overrides config budget
+
+## Session 4: Logger Implementation (curb-et7)
+
+### Task: Implement logger.sh with JSONL output
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Created `lib/logger.sh` with full JSONL logging functionality
+   - `logger_init(project_name, session_id)` - Initialize log file at ~/.local/share/curb/logs/{project}/{session}.jsonl
+   - `logger_write(event_type, data_json)` - Append structured log entries
+   - `logger_get_file()` - Get current log file path
+   - `logger_clear()` - Clear logger state for testing
+
+2. Created comprehensive test suite in `tests/logger.bats`
+   - 24 tests covering all logger functions
+   - Tests for initialization, writing, error handling, and edge cases
+   - Acceptance criteria tests for JSONL format, ISO 8601 timestamps, and append-only behavior
+
+### Test Results:
+- All 24 new logger tests PASS
+- All 143 existing tests continue to PASS
+- Total: 167 tests passing
+
+### Learnings:
+- **Bash 3.2 parameter default bug**: macOS ships with bash 3.2.57 (from 2007) which has a bug with `${2:-{}}` syntax
+  - When parameter contains curly braces, bash 3.2 incorrectly appends the closing `}` from the default value syntax
+  - Bug: `local data_json="${2:-{}}"` with argument `'{"key":"value"}'` results in `'{"key":"value"}}'` (extra `}`)
+  - Solution: Use explicit if-check instead: `if [[ -z "$data_json" ]]; then data_json="{}"; fi`
+  - This is a known macOS bash limitation due to GPL3 license avoidance
+
+- **jq JSON construction**: For building JSON from bash variables, pipe approach is more reliable than `--argjson`
+  - `echo "$json" | jq -c --arg key "$value" '{...}'` handles complex JSON better
+  - Validate JSON first with `jq -e '.'` before processing
+
+- **ISO 8601 timestamps**: Use `date -u +"%Y-%m-%dT%H:%M:%SZ"` for UTC timestamps in ISO 8601 format
+  - `-u` flag ensures UTC timezone
+  - Format yields: `2026-01-09T01:45:20Z`
+
+- **JSONL format**: JSON Lines format is ideal for structured logs
+  - One complete JSON object per line
+  - Grep-friendly and jq-queryable
+  - Easy to append and process incrementally
+
+- **XDG integration**: Logger uses `curb_logs_dir()` from xdg.sh for proper directory structure
+  - Maintains separation of concerns
+  - Easy to override in tests by redefining the function
+
+### Implementation Details:
+- Log files created at `$(curb_logs_dir)/{project}/{session}.jsonl`
+- Each log entry contains: `timestamp`, `event_type`, and `data` fields
+- Directory structure created automatically on logger_init
+- JSON validation ensures data_json parameter is valid before writing
+- Error messages go to stderr, normal operation is silent
+- Append-only writes preserve all previous entries
+
+### Acceptance Criteria Met:
+✓ Log file created at ~/.local/share/curb/logs/{project}/{session}.jsonl
+✓ Each line is valid JSON
+✓ Timestamps in ISO 8601 format
+✓ Log file is append-only
+
+## Session 5: Task Logging Functions (curb-ohp)
+
+### Task: Add log_task_start/end functions with metadata
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Added `log_task_start(task_id, task_title, harness)` to `lib/logger.sh`
+   - Validates all required parameters
+   - Logs task_start event with task_id, task_title, and harness fields
+   - Uses jq for safe JSON construction
+
+2. Added `log_task_end(task_id, exit_code, duration_sec, tokens_used)` to `lib/logger.sh`
+   - Validates required parameters (tokens_used is optional, defaults to 0)
+   - Captures current git SHA for traceability using `git rev-parse HEAD`
+   - Falls back to "unknown" if git command fails
+   - Logs task_end event with exit_code, duration, tokens, and git_sha
+
+3. Added `log_error(message, context)` to `lib/logger.sh`
+   - Validates message is provided
+   - Context is optional JSON object (defaults to {})
+   - Validates context JSON before writing
+   - Logs error event with message and context fields
+
+4. Created comprehensive test suite with 22 new tests in `tests/logger.bats`
+   - Tests for all three new functions
+   - Error handling tests (missing parameters, invalid JSON)
+   - Integration tests (full task lifecycle, task with errors)
+   - Acceptance criteria tests
+
+### Test Results:
+- All 22 new task logging tests PASS
+- All 167 existing tests continue to PASS
+- Total: 189 tests passing
+
+### Learnings:
+- **Default parameters with bash 3.2**: Use explicit parameter default handling for optional arguments
+  - `local tokens_used="${4:-0}"` works correctly in bash 3.2
+  - This is different from the bash 3.2 bug with curly braces in `${2:-{}}`
+  - The bug only affects default values that contain braces, not the expansion syntax itself
+
+- **jq numeric parameters**: Use `--argjson` for numeric values to preserve type
+  - `--argjson exit_code "$exit_code"` keeps numbers as JSON numbers
+  - `--arg exit_code "$exit_code"` would make them strings
+  - Important for downstream consumers parsing the JSONL logs
+
+- **Git SHA capture**: Use `git rev-parse HEAD` with fallback
+  - `git_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")`
+  - Redirects stderr to avoid polluting logs if not in git repo
+  - Provides fallback value for non-git environments
+
+- **Structured logging patterns**: Three-tier event structure
+  - `task_start` - Marks beginning with identifiers and context
+  - `error` - Optional intermediate events for failures
+  - `task_end` - Marks completion with results and traceability
+  - This pattern enables end-to-end task tracking and debugging
+
+- **Test organization**: Group tests by function, then add integration tests
+  - Unit tests for each function first
+  - Integration tests showing realistic workflows
+  - Acceptance tests directly matching spec criteria
+  - Makes it easy to identify which function has issues if tests fail
+
+### Implementation Details:
+- All three functions use `logger_write()` internally for consistency
+- Functions follow same validation pattern as existing logger functions
+- Error messages go to stderr for troubleshooting
+- Functions return exit code 1 on failure, 0 on success
+- Git SHA is 40-char hex string or "unknown"
+- Duration tracking will use bash `$SECONDS` variable in main loop
+
+### Acceptance Criteria Met:
+✓ task_start event logged with task_id, title, harness
+✓ task_end event logged with duration, exit_code, tokens, git_sha
+✓ Errors logged with context
+
+## Session 6: Config Integration into Main Script (curb-13j)
+
+### Task: Integrate config into main curb script
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Sourced `lib/config.sh` after `lib/xdg.sh` in the main curb script
+2. Added `config_load` call early in script initialization (before setting defaults)
+3. Replaced HARNESS default with `config_get_or "harness.default" "auto"`
+4. Replaced MAX_ITERATIONS with `config_get_or "loop.max_iterations" "100"`
+5. Maintained proper priority order: CLI flags > env vars > config file > hardcoded defaults
+
+### Test Results:
+- All 189 existing tests continue to PASS
+- Manual testing confirmed config file values are respected
+- Manual testing confirmed env vars and CLI flags override config values
+
+### Learnings:
+- **Config precedence architecture**: The bash `${VAR:-default}` pattern naturally implements priority
+  - `HARNESS="${HARNESS:-$(config_get_or "harness.default" "auto")}"` 
+  - This reads as: "Use $HARNESS if set, otherwise use config file value, otherwise use 'auto'"
+  - Priority chain: CLI flag sets HARNESS → env var sets HARNESS → config file → hardcoded default
+  - This pattern is clean and maintainable for bash scripts
+
+- **Early config loading**: Load config before setting any defaults
+  - Call `config_load` immediately after sourcing all libraries
+  - This ensures config is available when initializing variables
+  - Avoids race conditions where config might not be loaded yet
+
+- **Config key naming convention**: Use dot-notation for nested values
+  - `harness.default` maps to `{"harness": {"default": "auto"}}`
+  - `loop.max_iterations` maps to `{"loop": {"max_iterations": 100}}`
+  - This convention makes config files self-documenting and hierarchical
+
+- **Testing config integration**: Use temp directories with custom config files
+  - Create test config in /tmp with specific values
+  - Source libraries directly to test config loading
+  - Verify both config defaults and override behavior
+  - Don't need full BATS tests for config integration - simple bash scripts work well
+
+### Implementation Details:
+- Config is loaded once at script startup, then cached
+- The `config_get_or` function handles missing keys gracefully
+- CLI flag parsing happens after config loading, allowing flags to override
+- Comments added to clarify priority order for future maintainers
+
+### Acceptance Criteria Met:
+✓ curb respects config file harness priority
+✓ curb respects config file max_iterations  
+✓ CLI flags still override config values
+
+### Next Steps:
+This completes the config integration. Future config values can follow the same pattern:
+1. Add key to config.sh documentation
+2. Use `config_get_or "key.path" "default"` in curb script
+3. Ensure env vars and CLI flags can still override
+
+## Session 7: Logger Integration into Main Loop (curb-0b5)
+
+### Task: Integrate logger into main loop
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Logger already sourced in main curb script at line 30
+2. Logger initialization added in two places:
+   - `run_loop()` - Initialize logger at startup with project name and session ID
+   - `run_iteration()` - Initialize if not already initialized (for --once mode)
+3. Task logging integrated around harness invocation:
+   - `log_task_start()` called before harness_invoke with task_id, title, and harness
+   - `log_task_end()` called after harness completes with exit_code, duration, and tokens_used
+   - `log_error()` called when harness exits with non-zero code
+4. Renamed original `log_error` function to `_log_error_console` to avoid naming conflict
+
+### Test Results:
+- All 189 existing BATS tests continue to PASS
+- Manual verification: log files created at ~/.local/share/curb/logs/curb/{session}.jsonl
+- Manual verification: JSONL entries contain task_start, task_end, and error events
+
+### Learnings:
+- **Function naming conflicts**: When adding a library with functions, check for naming conflicts with existing functions
+  - Original curb had `log_error()` for console output
+  - lib/logger.sh has `log_error()` for structured logging
+  - Solution: Rename original to `_log_error_console()` (underscore prefix indicates internal/private)
+  - This preserves both behaviors without breaking existing code
+
+- **Dual initialization pattern**: Logger needs initialization in both places
+  - `run_loop()` - Main entry point for normal operations
+  - `run_iteration()` - Entry point for `curb --once` single iteration mode
+  - Use guard check `if [[ -z "$(logger_get_file)" ]]` to prevent re-initialization
+  - This ensures logger works in all execution modes
+
+- **Lazy initialization benefits**: Check if logger already initialized before initializing
+  - Prevents duplicate initialization
+  - Allows flexibility in execution modes (loop vs once vs manual)
+  - `logger_get_file()` returns empty string if not initialized, making it perfect for guard
+
+- **Task metadata extraction**: Extract task details once and reuse
+  - Extract task_id and task_title before harness invocation
+  - Use same variables for logging and error handling
+  - Reduces duplicate jq parsing and keeps code DRY
+
+- **Duration tracking pattern**: Use bash built-in time tracking
+  - `start_time=$(date +%s)` - Capture start timestamp in seconds
+  - `end_time=$(date +%s)` - Capture end timestamp
+  - `duration=$((end_time - start_time))` - Calculate elapsed time
+  - Simple, reliable, and portable across all Unix systems
+
+- **Tokens placeholder**: Token counting not yet implemented
+  - Pass 0 as placeholder value for tokens_used parameter
+  - Allows logger API to stay stable when token counting is added later
+  - Future task can extract token usage from harness output
+
+### Implementation Details:
+- Session ID format: `YYYYMMDD-HHMMSS` (e.g., "20260109-210920")
+- Log file path: `~/.local/share/curb/logs/{project}/{session}.jsonl`
+- Each iteration uses same session log file (one file per curb invocation)
+- Git SHA captured automatically in log_task_end for traceability
+- All log writes are append-only, preserving complete execution history
+
+### Acceptance Criteria Met:
+✓ Running curb creates log file at ~/.local/share/curb/logs/{project}/{session}.jsonl
+✓ Each task iteration produces start/end log entries with complete metadata
+✓ Log includes harness, task_id, duration, exit_code, and git_sha
+
+### Next Steps:
+Logger integration is complete. Future enhancements could include:
+1. Token usage extraction from harness output (when available)
+2. Log analysis tools to generate reports from JSONL logs
+3. Real-time log monitoring/streaming for long-running loops
+
+## Session 8: Global Onboarding (curb-kiz)
+
+### Task: Add curb init --global for onboarding
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+1. Added --global flag handling to curb-init script
+   - Parses `--global` flag before processing project directory
+   - Routes to global initialization instead of project initialization
+   - Early exit after global init completes
+
+2. Dependency checking for global setup
+   - Checks for `jq` (required for JSON parsing)
+   - Checks for at least one harness (claude or codex)
+   - Provides installation instructions for missing dependencies
+   - Exits with clear error if dependencies missing
+
+3. Global directory structure creation
+   - Uses XDG Base Directory Specification via lib/xdg.sh
+   - Creates `~/.config/curb/` for configuration
+   - Creates `~/.local/share/curb/logs/` for logs
+   - Creates `~/.cache/curb/` for cache
+   - Uses `curb_ensure_dirs()` helper function
+
+4. Config file generation with sensible defaults
+   - Creates `~/.config/curb/config.json` with:
+     - `harness.default`: "auto" (auto-detect available harness)
+     - `harness.priority`: ["claude", "codex"] (preference order)
+     - `budget.default`: 1000000 tokens (reasonable default)
+     - `budget.warn_at`: 0.8 (warn at 80% of budget)
+     - `loop.max_iterations`: 100 (safety limit)
+     - `clean_state.require_commit`: true (ensure changes committed)
+     - `clean_state.require_tests`: false (opt-in for test enforcement)
+     - `hooks.enabled`: true (enable hook system)
+   - Skips creation if file already exists (idempotent)
+
+5. Hook directories creation
+   - Creates 5 hook directories under `~/.config/curb/hooks/`:
+     - `pre-loop.d/` - Before starting the main loop
+     - `pre-task.d/` - Before each task execution
+     - `post-task.d/` - After each task execution
+     - `on-error.d/` - When a task fails
+     - `post-loop.d/` - After the main loop completes
+   - Warns if directories already exist (idempotent)
+
+6. Comprehensive success message
+   - Shows paths to all created resources
+   - Lists next steps for the user
+   - Documents key configuration options
+   - Guides user to project initialization
+
+### Test Results:
+- Manual testing: `curb-init --global` successfully creates all files and directories
+- Idempotent: Running again shows appropriate warnings, doesn't fail
+- Regular project init: `curb-init .` still works correctly (not affected by new flag)
+- Dependencies: Properly detects jq and available harnesses
+
+### Learnings:
+- **Flag parsing in bash**: Parse flags before positional arguments
+  - Check `${1:-}` for flag, then shift if it matches
+  - Remaining arguments become positional parameters
+  - Use boolean variable to track flag state throughout script
+
+- **Sourcing libraries in scripts**: Must source dependencies early
+  - Source lib/xdg.sh at the top to get directory helpers
+  - Libraries must be sourced before using their functions
+  - Use `CURB_DIR` to find libraries relative to script location
+
+- **Idempotent initialization**: Check before creating
+  - Check if config file exists before writing
+  - Check if directories exist before creating (mkdir -p handles this)
+  - Provide different messages for "created" vs "already exists"
+  - Use warnings (log_warn) for skip cases, not errors
+
+- **User-friendly output**: Guide the user through next steps
+  - Show what was created and where
+  - Explain what each configuration option does
+  - Provide clear next steps (customize config, init project, start curb)
+  - Include installation instructions for missing dependencies
+
+- **Dependency checking pattern**: Clear error messages with instructions
+  - Check each dependency individually
+  - Collect all missing dependencies in an array
+  - Show installation instructions for each missing dependency
+  - Exit with error only after showing all missing items
+
+- **Config file defaults**: Balance between permissive and safe
+  - Large token budget (1000000) for experimentation
+  - Warn at 80% to give user time to decide
+  - Reasonable max_iterations (100) as safety net
+  - Require commits by default (ensure clean state)
+  - Don't require tests by default (opt-in for strictness)
+
+### Implementation Details:
+- Script structure: flag parsing → global init OR project init (not both)
+- Global init creates: config dir, logs dir, cache dir, hooks dirs, config file
+- Config format: Valid JSON with nested structure for related settings
+- Hook directories: Named with `.d` suffix following convention (e.g., `pre-task.d/`)
+- Exit code: 0 on success, 1 on missing dependencies
+- Project init: Completely unchanged, maintains backward compatibility
+
+### Acceptance Criteria Met:
+✓ curb init --global creates ~/.config/curb/config.json
+✓ Missing dependencies are reported clearly
+✓ Config has sensible defaults for budget, harness priority
+✓ Hook directories created
+
+### Next Steps:
+Global onboarding is complete. Users can now:
+1. Run `curb-init --global` for first-time setup
+2. Customize config file and add hooks
+3. Initialize projects with `curb-init <project-dir>`
+4. Start using curb with confidence that global config is properly set up
+
+## Session 9: Phase 1 Checkpoint Validation (curb-hp9)
+
+### Task: Checkpoint: Config and Logging Complete
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was validated:
+Phase 1 is complete. All configuration and logging features are working correctly:
+
+1. **Global Config**: `curb init --global` command
+   - Creates `~/.config/curb/config.json` with sensible defaults
+   - Creates XDG directory structure (config, logs, cache)
+   - Creates hook directories (pre-loop.d, pre-task.d, post-task.d, on-error.d, post-loop.d)
+   - Idempotent: can be run multiple times safely
+   - Checks dependencies (jq, harnesses)
+
+2. **Project Config Override**: `.curb.json` file in project root
+   - Project config properly overrides global config values
+   - Tested with budget.default (500000 overriding 1000000)
+   - Tested with loop.max_iterations (50 overriding 100)
+   - Non-overridden values fall back to global config (harness.default: "auto")
+   - Config precedence: env vars > project > global > defaults
+
+3. **Structured Logging**: JSONL logs after each run
+   - Logs created at `~/.local/share/curb/logs/{project}/{session}.jsonl`
+   - Session ID format: `YYYYMMDD-HHMMSS` (e.g., "20260109-214858")
+   - Log entries contain: timestamp (ISO 8601), event_type, and data
+   - Event types: task_start, task_end, error
+   - Logs are append-only and preserve complete execution history
+
+4. **Log Querying with jq**:
+   - Logs are queryable: `jq 'select(.event_type=="task_start")' logs/*.jsonl`
+   - Each event has proper structure for filtering and analysis
+   - task_start includes: task_id, task_title, harness
+   - task_end includes: exit_code, duration, tokens_used, git_sha
+   - error events include: message, context
+
+### Validation Results:
+- All 189 BATS tests PASS
+- Manual testing confirmed all features working correctly
+- Config schema is intuitive and well-documented
+- Logs capture all necessary metadata for debugging and analysis
+- All settings that need to be configurable are in config.json
+
+### Learnings:
+- **Checkpoint tasks are for validation, not implementation**: This task was purely about validating that previous work is complete and functioning correctly
+  - Run manual tests to verify user-facing features
+  - Check that integration between components works
+  - Ensure documentation matches implementation
+  - Validate acceptance criteria before closing
+
+- **Config file location**: Project config is `.curb.json` (not `.curb/config.json`)
+  - This follows the dotfile convention for project-specific config
+  - The `.curb/` directory is used by beads for task tracking
+  - Global config is at `~/.config/curb/config.json` (follows XDG spec)
+
+- **Testing config merging**: Use bash to source libraries and test
+  - Source dependencies in order: xdg.sh before config.sh
+  - Call config_load, then use config_get to verify values
+  - Test both override and fallback scenarios
+
+- **Beads task management**: This project uses `bd` CLI instead of prd.json
+  - `bd close <id> -r "reason"` to close tasks
+  - `bd list --status <status>` to query tasks by status
+  - Task status appears in `.beads/issues.jsonl`
+
+- **Phase 1 is complete**: All foundational features ready
+  - Global and project configuration working
+  - Structured logging with metadata
+  - Onboarding experience via `curb init --global`
+  - Ready to proceed to Phase 2: Reliability features
+
+### Questions Answered:
+**Q: Is the config schema intuitive?**
+A: Yes. Nested JSON with dot-notation access (e.g., "harness.default", "budget.warn_at") is clear and follows common patterns from other tools.
+
+**Q: Are the logs capturing the right metadata?**
+A: Yes. Logs include timestamps, event types, task IDs, durations, exit codes, git SHAs, and error context. This provides complete traceability for debugging.
+
+**Q: Any settings that should be configurable but aren't?**
+A: Current config covers all essential settings. Future phases may add hook-specific config and additional harness options.
+
+### Next Steps:
+Phase 1 validation complete. Ready to proceed to Phase 2: Reliability
+- Clean state verification (require commits, optional test runs)
+- Budget tracking and enforcement
+- Budget warnings at threshold
+
+## Session 10: Epic/Label Filtering and Beads Integration (curb-zlk)
+
+### Task: Add epic and label targeting, fix beads integration issues
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+
+1. **Epic and Label Filtering**
+   - Added `--epic <id>` flag to target tasks within a specific epic
+   - Added `--label <name>` flag to target tasks with a specific label
+   - Both flags can be combined (AND logic)
+   - Works with both beads and JSON backends
+   - Environment variables: `CURB_EPIC`, `CURB_LABEL`
+   - Leverages beads CLI's native `--parent` and `--label` flags
+
+2. **Per-Task Model Selection**
+   - Tasks with `model:X` labels (e.g., `model:haiku`, `model:sonnet`) auto-select the model
+   - Main loop extracts model label and sets `CURB_MODEL` before harness invocation
+   - Only applies to Claude harness (other harnesses may not support model selection)
+
+3. **Beads Backend Fixes**
+   - Fixed hardcoded `prd.json` references that broke beads backend
+   - `run_loop()` now uses `get_remaining_count()` abstraction
+   - `show_status()` now uses `get_task_counts()` abstraction
+   - `show_ready()` checks backend before JSON validation
+   - Added `get_remaining_count()` and `is_task_ready()` unified interfaces
+
+4. **Blocked Task Detection**
+   - Before resuming in-progress task, verify it's not blocked
+   - If blocked (dependencies reopened), reset to open status
+   - Added `beads_is_task_ready()` using `bd ready --json` output
+   - Added `json_is_task_ready()` for JSON backend
+
+5. **Filter Support in In-Progress Detection**
+   - `get_in_progress_task()` now accepts epic and label filters
+   - Ensures in-progress task within filter scope is found correctly
+   - Updated beads and JSON implementations
+
+### Files Modified:
+- `curb` - Main script: flag parsing, filter passing, model extraction
+- `lib/tasks.sh` - Unified interface: filter parameters, new functions
+- `lib/beads.sh` - Beads wrapper: filter support, ready checks
+
+### Learnings:
+
+- **Backend abstraction is critical**: All task queries should go through lib/tasks.sh, never directly to prd.json or bd CLI. This ensures both backends work correctly.
+
+- **Filter parameters flow through the stack**: Epic and label filters need to be passed from CLI → run_iteration → get_ready_tasks → backend implementation.
+
+- **Beads CLI is powerful**: `bd ready --parent X --label Y` does all the heavy lifting for filtering. We just expose it through curb's interface.
+
+- **Model labels are task metadata, not filters**: The `model:X` label is read FROM the task, not used to filter tasks. It's extracted after task selection.
+
+- **Guard against blocked resumption**: If a task's dependencies are reopened, the in-progress task becomes blocked. Must check before resuming.
+
+### Updated Documentation:
+- README.md: Added filtering usage, model labels, environment variables, configuration section, logging section, updated files reference
+- CONTRIBUTING.md: Updated architecture diagram, required backend functions, model label support, test commands
+
+### Test Coverage:
+- All 189 existing BATS tests continue to PASS
+- Manual testing verified filtering with beads backend works correctly

@@ -22,6 +22,15 @@ PROJECT_DIR="${CURB_PROJECT_DIR:-$(pwd)}"
 source "${CURB_DIR}/lib/tasks.sh"
 # Source harness abstraction layer
 source "${CURB_DIR}/lib/harness.sh"
+# Source XDG directory helpers
+source "${CURB_DIR}/lib/xdg.sh"
+# Source configuration management
+source "${CURB_DIR}/lib/config.sh"
+# Source logger
+source "${CURB_DIR}/lib/logger.sh"
+
+# Load configuration early
+config_load
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,14 +48,22 @@ STREAM="${CURB_STREAM:-false}"
 # Backend mode (set via --backend flag or CURB_BACKEND env)
 # Values: "auto", "beads", "json"
 BACKEND="${CURB_BACKEND:-auto}"
-# Harness (set via --harness flag or HARNESS env)
+# Harness (set via --harness flag, HARNESS env, or config file)
 # Values: "auto", "claude", "codex"
-HARNESS="${HARNESS:-auto}"
+# Priority: CLI flag > env var > config file > default
+HARNESS="${HARNESS:-$(config_get_or "harness.default" "auto")}"
+# Model (set via --model flag or CURB_MODEL env)
+# Values: "opus", "sonnet", "haiku" (only applies to claude harness)
+MODEL="${CURB_MODEL:-}"
+# Epic filter (set via --epic flag or CURB_EPIC env)
+EPIC="${CURB_EPIC:-}"
+# Label filter (set via --label flag or CURB_LABEL env)
+LABEL="${CURB_LABEL:-}"
 
 log_info() { echo -e "${BLUE}[curb]${NC} $1"; }
 log_success() { echo -e "${GREEN}[curb]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[curb]${NC} $1"; }
-log_error() { echo -e "${RED}[curb]${NC} $1" >&2; }
+_log_error_console() { echo -e "${RED}[curb]${NC} $1" >&2; }
 log_debug() {
     if [[ "$DEBUG" == "true" ]]; then
         echo -e "${DIM}${CYAN}[debug]${NC}${DIM} $1${NC}" >&2
@@ -64,7 +81,7 @@ check_deps() {
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
-        log_error "Missing dependencies: ${missing[*]}"
+        _log_error_console "Missing dependencies: ${missing[*]}"
         exit 1
     fi
 
@@ -87,7 +104,7 @@ validate_project() {
     else
         log_info "Using JSON backend (prd.json)"
         if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
-            log_error "No prd.json found in ${PROJECT_DIR}"
+            _log_error_console "No prd.json found in ${PROJECT_DIR}"
             log_info "Run 'curb-init' to scaffold a new project"
             exit 1
         fi
@@ -111,36 +128,31 @@ validate_project() {
 # Show task status summary
 show_status() {
     local prd="${PROJECT_DIR}/prd.json"
+    local backend=$(get_backend)
 
-    # Validate JSON before processing
-    if ! jq empty "$prd" 2>/dev/null; then
-        log_error "Invalid JSON in prd.json"
-        return 1
+    # Validate JSON before processing (only for json backend)
+    if [[ "$backend" == "json" ]]; then
+        if ! jq empty "$prd" 2>/dev/null; then
+            _log_error_console "Invalid JSON in prd.json"
+            return 1
+        fi
     fi
 
     echo ""
     log_info "Task Status Summary"
     echo "===================="
 
-    local total=$(jq '.tasks | length' "$prd")
-    local closed=$(jq '[.tasks[] | select(.status == "closed")] | length' "$prd")
-    local in_progress=$(jq '[.tasks[] | select(.status == "in_progress")] | length' "$prd")
-    local open=$(jq '[.tasks[] | select(.status == "open")] | length' "$prd")
+    local counts
+    counts=$(get_task_counts "$prd")
+    local total=$(echo "$counts" | jq -r '.total')
+    local closed=$(echo "$counts" | jq -r '.closed')
+    local in_progress=$(echo "$counts" | jq -r '.in_progress')
+    local open=$(echo "$counts" | jq -r '.open')
 
     echo -e "Total:       ${total}"
     echo -e "Closed:      ${GREEN}${closed}${NC}"
     echo -e "In Progress: ${YELLOW}${in_progress}${NC}"
     echo -e "Open:        ${open}"
-    echo ""
-
-    # Show by priority
-    log_info "By Priority"
-    for p in P0 P1 P2 P3 P4; do
-        local count=$(jq --arg p "$p" '[.tasks[] | select(.priority == $p and .status != "closed")] | length' "$prd")
-        if [[ "$count" -gt 0 ]]; then
-            echo "  ${p}: ${count} remaining"
-        fi
-    done
     echo ""
 
     # Progress bar
@@ -158,19 +170,28 @@ show_status() {
 # Show ready tasks
 show_ready() {
     local prd="${PROJECT_DIR}/prd.json"
+    local backend=$(get_backend)
 
-    # Validate JSON before processing
-    if ! jq empty "$prd" 2>/dev/null; then
-        log_error "Invalid JSON in prd.json"
-        return 1
+    # Validate JSON before processing (only for json backend)
+    if [[ "$backend" == "json" ]]; then
+        if ! jq empty "$prd" 2>/dev/null; then
+            _log_error_console "Invalid JSON in prd.json"
+            return 1
+        fi
     fi
 
     log_info "Ready Tasks (unblocked, status=open)"
+    if [[ -n "$EPIC" ]]; then
+        log_info "  Epic filter: $EPIC"
+    fi
+    if [[ -n "$LABEL" ]]; then
+        log_info "  Label filter: $LABEL"
+    fi
     echo "======================================"
 
-    local ready=$(get_ready_tasks "$prd")
+    local ready=$(get_ready_tasks "$prd" "$EPIC" "$LABEL")
 
-    if [[ -z "$ready" || "$ready" == "null" ]]; then
+    if [[ -z "$ready" || "$ready" == "null" || "$ready" == "[]" ]]; then
         log_warn "No ready tasks found"
         return
     fi
@@ -219,37 +240,63 @@ EOF
 # Run a single iteration
 run_iteration() {
     local prd="${PROJECT_DIR}/prd.json"
-    log_debug "Starting iteration, reading prd.json"
+    log_debug "Starting iteration"
+
+    # Initialize logger if not already initialized
+    if [[ -z "$(logger_get_file)" ]]; then
+        local project_name
+        project_name=$(basename "$PROJECT_DIR")
+        local session_id
+        session_id=$(date +"%Y%m%d-%H%M%S")
+
+        if logger_init "$project_name" "$session_id"; then
+            log_debug "Logger initialized: $(logger_get_file)"
+        else
+            log_warn "Failed to initialize logger"
+        fi
+    fi
 
     # Check for in-progress tasks first (resume interrupted work)
+    # Respects --epic and --label filters
     local current_task
     log_debug "Checking for in-progress tasks..."
-    current_task=$(jq '[.tasks[] | select(.status == "in_progress")] | first' "$prd")
+    current_task=$(get_in_progress_task "$prd" "$EPIC" "$LABEL")
     log_debug "In-progress query result: ${current_task:0:100}..."
 
-    if [[ "$current_task" != "null" && -n "$current_task" ]]; then
+    if [[ -n "$current_task" && "$current_task" != "null" ]]; then
         local task_id=$(echo "$current_task" | jq -r '.id')
         local task_title=$(echo "$current_task" | jq -r '.title')
         local task_type=$(echo "$current_task" | jq -r '.type')
-        log_warn "Resuming in-progress task: ${task_id}"
-        log_info "  ${task_type}: ${task_title}"
-        log_debug "Task JSON: $current_task"
-    else
+
+        # Verify the in-progress task is not blocked
+        if is_task_ready "$prd" "$task_id"; then
+            log_warn "Resuming in-progress task: ${task_id}"
+            log_info "  ${task_type}: ${task_title}"
+            log_debug "Task JSON: $current_task"
+        else
+            log_warn "In-progress task ${task_id} is blocked, resetting to open"
+            update_task_status "$prd" "$task_id" "open"
+            current_task=""
+        fi
+    fi
+
+    # Find next ready task if no valid in-progress task
+    if [[ -z "$current_task" || "$current_task" == "null" ]]; then
         # Find next ready task
         log_debug "No in-progress tasks, finding ready tasks..."
         local ready_tasks
-        ready_tasks=$(get_ready_tasks "$prd")
+        ready_tasks=$(get_ready_tasks "$prd" "$EPIC" "$LABEL")
         log_debug "Ready tasks result: ${ready_tasks:0:200}..."
 
         if [[ -z "$ready_tasks" || "$ready_tasks" == "[]" ]]; then
             # Check if we're done
-            local open_count=$(jq '[.tasks[] | select(.status != "closed")] | length' "$prd")
+            local open_count=$(get_remaining_count "$prd")
             log_debug "Open task count: ${open_count}"
             if [[ "$open_count" -eq 0 ]]; then
                 log_success "All tasks complete!"
                 return 0
             else
-                log_error "No ready tasks but ${open_count} tasks not closed. Check dependencies."
+                _log_error_console "No ready tasks but ${open_count} tasks not closed. Check dependencies."
                 return 1
             fi
         fi
@@ -269,6 +316,17 @@ run_iteration() {
         log_debug "Updating task status to in_progress..."
         update_task_status "$prd" "$task_id" "in_progress"
         log_debug "Task status updated"
+    fi
+
+    # Check for model: label and set CURB_MODEL if harness is claude
+    local harness=$(harness_get)
+    if [[ "$harness" == "claude" ]]; then
+        local task_model
+        task_model=$(echo "$current_task" | jq -r '.labels // [] | .[] | select(startswith("model:")) | split(":")[1]' 2>/dev/null | head -1)
+        if [[ -n "$task_model" ]]; then
+            log_info "  Model from label: ${task_model}"
+            export CURB_MODEL="$task_model"
+        fi
     fi
 
     # Generate prompts
@@ -294,7 +352,6 @@ run_iteration() {
         echo ""
     fi
 
-    local harness=$(harness_get)
     log_info "Running ${harness}..."
     echo ""
 
@@ -305,6 +362,13 @@ run_iteration() {
         version_output=$(harness_version 2>&1) && log_debug "Version: ${version_output}" || log_debug "WARNING: version check failed"
         log_debug "Binary: $(which ${harness})"
     fi
+
+    # Extract task details for logging
+    local task_id=$(echo "$current_task" | jq -r '.id')
+    local task_title=$(echo "$current_task" | jq -r '.title')
+
+    # Log task start
+    log_task_start "$task_id" "$task_title" "$harness"
 
     # Run harness with the prompt via abstraction layer
     local start_time=$(date +%s)
@@ -354,9 +418,14 @@ run_iteration() {
     log_debug "Duration: ${duration} seconds"
     log_debug "Exit code: ${exit_code}"
 
+    # Log task end (tokens_used defaulted to 0 since we don't have that info yet)
+    log_task_end "$task_id" "$exit_code" "$duration" 0
+
     if [[ $exit_code -ne 0 ]]; then
         log_warn "Claude Code exited with code ${exit_code}"
         log_debug "Non-zero exit may indicate: timeout, error, or user interrupt"
+        # Log error to structured logger
+        log_error "Harness exited with non-zero code" "{\"task_id\": \"$task_id\", \"exit_code\": $exit_code, \"harness\": \"$harness\"}"
     else
         log_debug "Claude Code completed successfully"
     fi
@@ -411,8 +480,20 @@ EOF
 
 # Main loop
 run_loop() {
-    local max_iterations="${CURB_MAX_ITERATIONS:-100}"
+    local max_iterations="${CURB_MAX_ITERATIONS:-$(config_get_or "loop.max_iterations" "100")}"
     local iteration=0
+
+    # Initialize logger with project name and session ID
+    local project_name
+    project_name=$(basename "$PROJECT_DIR")
+    local session_id
+    session_id=$(date +"%Y%m%d-%H%M%S")
+
+    if logger_init "$project_name" "$session_id"; then
+        log_debug "Logger initialized: $(logger_get_file)"
+    else
+        log_warn "Failed to initialize logger"
+    fi
 
     log_info "Starting curb loop (max ${max_iterations} iterations)"
     log_debug "Max iterations: ${max_iterations}"
@@ -427,7 +508,7 @@ run_loop() {
         # Check if all tasks complete
         local prd="${PROJECT_DIR}/prd.json"
         log_debug "Querying remaining tasks..."
-        local remaining=$(jq '[.tasks[] | select(.status != "closed")] | length' "$prd")
+        local remaining=$(get_remaining_count "$prd")
         log_debug "Remaining tasks: ${remaining}"
 
         if [[ "$remaining" -eq 0 ]]; then
@@ -496,12 +577,46 @@ main() {
             HARNESS="$arg"
             export HARNESS
             _next_is_harness=false
+        elif [[ "$arg" == "--model="* ]]; then
+            MODEL="${arg#--model=}"
+            export CURB_MODEL="$MODEL"
+        elif [[ "$arg" == "--model" ]]; then
+            # Next arg is the model value - handle in next iteration
+            _next_is_model=true
+            continue
+        elif [[ "${_next_is_model:-}" == "true" ]]; then
+            MODEL="$arg"
+            export CURB_MODEL="$MODEL"
+            _next_is_model=false
+        elif [[ "$arg" == "--epic="* ]]; then
+            EPIC="${arg#--epic=}"
+            export CURB_EPIC="$EPIC"
+        elif [[ "$arg" == "--epic" ]]; then
+            _next_is_epic=true
+            continue
+        elif [[ "${_next_is_epic:-}" == "true" ]]; then
+            EPIC="$arg"
+            export CURB_EPIC="$EPIC"
+            _next_is_epic=false
+        elif [[ "$arg" == "--label="* ]]; then
+            LABEL="${arg#--label=}"
+            export CURB_LABEL="$LABEL"
+        elif [[ "$arg" == "--label" ]]; then
+            _next_is_label=true
+            continue
+        elif [[ "${_next_is_label:-}" == "true" ]]; then
+            LABEL="$arg"
+            export CURB_LABEL="$LABEL"
+            _next_is_label=false
         else
             args+=("$arg")
         fi
     done
     unset _next_is_backend
     unset _next_is_harness
+    unset _next_is_model
+    unset _next_is_epic
+    unset _next_is_label
 
     check_deps
     log_debug "Dependencies checked: jq and harness found"
@@ -533,7 +648,7 @@ main() {
             if echo "Say hello" | claude -p; then
                 log_success "Test 1 passed"
             else
-                log_error "Test 1 failed (exit: $?)"
+                _log_error_console "Test 1 failed (exit: $?)"
             fi
             echo ""
             log_info "Test 2: Heredoc pipe"
@@ -541,7 +656,7 @@ main() {
             if claude -p <<< "Say goodbye"; then
                 log_success "Test 2 passed"
             else
-                log_error "Test 2 failed (exit: $?)"
+                _log_error_console "Test 2 failed (exit: $?)"
             fi
             echo ""
             log_info "Test 3: Multi-line prompt"
@@ -552,14 +667,14 @@ Say 'curb test successful' and nothing else."
             if echo "$test_prompt" | claude -p; then
                 log_success "Test 3 passed"
             else
-                log_error "Test 3 failed (exit: $?)"
+                _log_error_console "Test 3 failed (exit: $?)"
             fi
             echo ""
             log_success "All tests complete"
             ;;
         --migrate-to-beads)
             if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
-                log_error "No prd.json found to migrate"
+                _log_error_console "No prd.json found to migrate"
                 exit 1
             fi
             log_info "Migrating from prd.json to beads..."
@@ -568,7 +683,7 @@ Say 'curb test successful' and nothing else."
             ;;
         --migrate-to-beads-dry-run)
             if [[ ! -f "${PROJECT_DIR}/prd.json" ]]; then
-                log_error "No prd.json found to migrate"
+                _log_error_console "No prd.json found to migrate"
                 exit 1
             fi
             log_info "DRY RUN: Showing what would be migrated..."
@@ -579,12 +694,12 @@ Say 'curb test successful' and nothing else."
             validate_project
             local prd="${PROJECT_DIR}/prd.json"
             local current_task
-            current_task=$(jq '[.tasks[] | select(.status == "in_progress")] | first' "$prd")
-            if [[ "$current_task" == "null" || -z "$current_task" ]]; then
+            current_task=$(get_in_progress_task "$prd")
+            if [[ -z "$current_task" || "$current_task" == "null" ]]; then
                 current_task=$(get_ready_tasks "$prd" | jq 'first')
             fi
             if [[ "$current_task" == "null" || -z "$current_task" ]]; then
-                log_error "No tasks available"
+                _log_error_console "No tasks available"
                 exit 1
             fi
             local sys_file="${PROJECT_DIR}/curb_system_prompt.txt"
@@ -619,6 +734,9 @@ Usage:
   curb --stream     Stream harness activity in real-time (can combine)
   curb --backend X  Force task backend: "beads" or "json" (default: auto-detect)
   curb --harness X  Force harness: "claude" or "codex" (default: auto-detect)
+  curb --model X    Set Claude model: "opus", "sonnet", or "haiku"
+  curb --epic <id>  Filter to tasks within a specific epic
+  curb --label <name> Filter to tasks with a specific label
 
 Flags:
   --debug, -d       Enable verbose debug output including:
@@ -638,6 +756,12 @@ Flags:
                     - auto: prefer claude, fall back to codex (default)
                     - claude: use Claude Code CLI
                     - codex: use OpenAI Codex CLI
+  --model <name>    Claude model selection (only applies to claude harness):
+                    - opus: Claude Opus (most capable)
+                    - sonnet: Claude Sonnet (balanced)
+                    - haiku: Claude Haiku (fastest)
+  --epic <id>       Filter to tasks that are children of the specified epic
+  --label <name>    Filter to tasks with the specified label (e.g., "phase-1")
 
 Environment:
   CURB_PROJECT_DIR     Project directory (default: pwd)
@@ -645,6 +769,9 @@ Environment:
   CURB_DEBUG           Enable debug mode (set to "true")
   CURB_BACKEND         Task backend: "auto", "beads", or "json"
   HARNESS              Harness: "auto", "claude", or "codex"
+  CURB_MODEL           Claude model: "opus", "sonnet", or "haiku"
+  CURB_EPIC            Filter to tasks within this epic ID
+  CURB_LABEL           Filter to tasks with this label
   CLAUDE_FLAGS         Extra flags for Claude Code CLI
   CODEX_FLAGS          Extra flags for OpenAI Codex CLI
 
