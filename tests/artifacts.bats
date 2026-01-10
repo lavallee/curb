@@ -552,11 +552,16 @@ teardown() {
     session_init --name "test-session"
     artifacts_start_task "test-001" "Test task"
 
-    # First capture
+    # Create and commit a file
+    echo "original" > test_file.txt
+    git add test_file.txt
+    git commit -m "Initial commit" >/dev/null 2>&1
+
+    # First capture (no changes)
     artifacts_capture_diff "test-001"
 
     # Make a change
-    echo "new file" > new_test.txt
+    echo "modified" > test_file.txt
 
     # Second capture should overwrite
     artifacts_capture_diff "test-001"
@@ -565,10 +570,11 @@ teardown() {
     task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
     local patch_file="${task_dir}/changes.patch"
 
-    # Should contain the new file
+    # Should contain the modified file (not the empty diff from first capture)
     local patch_content
     patch_content=$(cat "$patch_file")
-    [[ "$patch_content" =~ "new_test.txt" ]]
+    [[ "$patch_content" =~ "test_file.txt" ]]
+    [[ "$patch_content" =~ "modified" ]]
 }
 
 @test "artifacts integration: capture all artifact types" {
@@ -604,4 +610,321 @@ teardown() {
     local line_count
     line_count=$(wc -l < "${task_dir}/commands.jsonl" | tr -d ' ')
     [ "$line_count" = "2" ]
+}
+
+@test "artifacts_get_path: fails without task_id" {
+    session_init --name "test-session"
+
+    run artifacts_get_path ""
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_get_path: returns absolute path" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_get_path "test-001"
+    [ "$status" -eq 0 ]
+
+    # Output should be an absolute path (starts with /)
+    [[ "$output" =~ ^/ ]]
+
+    # Should contain the expected structure
+    [[ "$output" =~ .curb/runs/test-session-.*/tasks/test-001 ]]
+}
+
+@test "artifacts_get_path: path is actually absolute and valid" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    local abs_path
+    abs_path=$(artifacts_get_path "test-001")
+
+    # Directory should exist when we use the absolute path
+    [ -d "$abs_path" ]
+}
+
+@test "artifacts_finalize_task: fails without task_id" {
+    session_init --name "test-session"
+
+    run artifacts_finalize_task "" "completed" "0" "Summary"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task_id is required" ]]
+}
+
+@test "artifacts_finalize_task: fails without status" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_finalize_task "test-001" "" "0" "Summary"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "status is required" ]]
+}
+
+@test "artifacts_finalize_task: fails without exit_code" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_finalize_task "test-001" "completed" "" "Summary"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "exit_code is required" ]]
+}
+
+@test "artifacts_finalize_task: fails if task.json doesn't exist" {
+    session_init --name "test-session"
+
+    run artifacts_finalize_task "test-001" "completed" "0" "Summary"
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "task.json not found" ]]
+}
+
+@test "artifacts_finalize_task: updates task.json with final status" {
+    session_init --name "test-session"
+    artifacts_init_run
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_finalize_task "test-001" "completed" "0" "All done"
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local task_json="${task_dir}/task.json"
+
+    # Check status
+    run jq -r '.status' "$task_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "completed" ]
+
+    # Check exit_code
+    run jq -r '.exit_code' "$task_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+
+    # Check completed_at exists and is ISO 8601 format
+    run jq -r '.completed_at' "$task_json"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+
+    # Check iterations incremented
+    run jq -r '.iterations' "$task_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+@test "artifacts_finalize_task: increments iterations" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    # Finalize twice
+    artifacts_finalize_task "test-001" "failed" "1" "First attempt"
+    artifacts_finalize_task "test-001" "completed" "0" "Second attempt"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local task_json="${task_dir}/task.json"
+
+    # Iterations should be 2
+    run jq -r '.iterations' "$task_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "2" ]
+}
+
+@test "artifacts_finalize_task: creates summary.md" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_finalize_task "test-001" "completed" "0" "Task completed successfully"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+
+    [ -f "${task_dir}/summary.md" ]
+}
+
+@test "artifacts_finalize_task: summary.md contains required fields" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_finalize_task "test-001" "completed" "0" "Task completed successfully"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local summary_file="${task_dir}/summary.md"
+
+    local summary_content
+    summary_content=$(cat "$summary_file")
+
+    # Check for required fields
+    [[ "$summary_content" =~ "Task Summary: Test task" ]]
+    [[ "$summary_content" =~ "Task ID: test-001" ]]
+    [[ "$summary_content" =~ "Status: completed" ]]
+    [[ "$summary_content" =~ "Exit Code: 0" ]]
+    [[ "$summary_content" =~ "Duration:" ]]
+    [[ "$summary_content" =~ "Files Changed:" ]]
+    [[ "$summary_content" =~ "Task completed successfully" ]]
+}
+
+@test "artifacts_finalize_task: summary.md has 600 permissions" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_finalize_task "test-001" "completed" "0" "Done"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local summary_file="${task_dir}/summary.md"
+
+    # Check permissions (should be 600)
+    local perms
+    perms=$(stat -f "%Lp" "$summary_file" 2>/dev/null || stat -c "%a" "$summary_file" 2>/dev/null)
+    [ "$perms" = "600" ]
+}
+
+@test "artifacts_finalize_task: updates run.json with tasks_completed counter" {
+    session_init --name "test-session"
+    artifacts_init_run
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_finalize_task "test-001" "completed" "0" "Done"
+
+    local run_dir
+    run_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)
+    local run_json="${run_dir}/run.json"
+
+    # Check tasks_completed counter
+    run jq -r '.tasks_completed' "$run_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+@test "artifacts_finalize_task: updates run.json with tasks_failed counter" {
+    session_init --name "test-session"
+    artifacts_init_run
+    artifacts_start_task "test-001" "Test task"
+
+    artifacts_finalize_task "test-001" "failed" "1" "Failed"
+
+    local run_dir
+    run_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)
+    local run_json="${run_dir}/run.json"
+
+    # Check tasks_failed counter
+    run jq -r '.tasks_failed' "$run_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+@test "artifacts_finalize_task: increments counters correctly for multiple tasks" {
+    session_init --name "test-session"
+    artifacts_init_run
+
+    # Create and finalize multiple tasks
+    artifacts_start_task "test-001" "Task 1"
+    artifacts_finalize_task "test-001" "completed" "0" "Done"
+
+    artifacts_start_task "test-002" "Task 2"
+    artifacts_finalize_task "test-002" "completed" "0" "Done"
+
+    artifacts_start_task "test-003" "Task 3"
+    artifacts_finalize_task "test-003" "failed" "1" "Failed"
+
+    local run_dir
+    run_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)
+    local run_json="${run_dir}/run.json"
+
+    # Check tasks_completed counter
+    run jq -r '.tasks_completed' "$run_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "2" ]
+
+    # Check tasks_failed counter
+    run jq -r '.tasks_failed' "$run_json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+@test "artifacts_finalize_task: handles empty summary_text" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    run artifacts_finalize_task "test-001" "completed" "0" ""
+    [ "$status" -eq 0 ]
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local summary_file="${task_dir}/summary.md"
+
+    local summary_content
+    summary_content=$(cat "$summary_file")
+
+    # Should have default text
+    [[ "$summary_content" =~ "No summary provided" ]]
+}
+
+@test "artifacts_finalize_task: calculates duration correctly" {
+    session_init --name "test-session"
+    artifacts_start_task "test-001" "Test task"
+
+    # Sleep for a bit to ensure duration is non-zero
+    sleep 2
+
+    artifacts_finalize_task "test-001" "completed" "0" "Done"
+
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "test-session-*" | head -1)/tasks/test-001
+    local summary_file="${task_dir}/summary.md"
+
+    local summary_content
+    summary_content=$(cat "$summary_file")
+
+    # Duration should be at least 1 second (we slept for 2)
+    # Match pattern like "**Duration:** 2s" (markdown bold)
+    [[ "$summary_content" =~ \*\*Duration:\*\*\ [0-9]+[smh] ]]
+}
+
+@test "artifacts integration: full task lifecycle with finalization" {
+    # Initialize git repo in test directory
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    session_init --name "lifecycle-test"
+    artifacts_init_run
+    artifacts_start_task "test-001" "Full lifecycle test"
+
+    # Capture plan
+    artifacts_capture_plan "test-001" "# Implementation Plan"
+
+    # Capture commands
+    artifacts_capture_command "test-001" "npm test" "0" "All tests passed" "5.2"
+
+    # Make some changes and capture diff
+    echo "test file" > test.txt
+    artifacts_capture_diff "test-001"
+
+    # Finalize the task
+    artifacts_finalize_task "test-001" "completed" "0" "Successfully implemented feature"
+
+    # Verify all files exist
+    local task_dir
+    task_dir=$(find .curb/runs -type d -name "lifecycle-test-*" | head -1)/tasks/test-001
+
+    [ -f "${task_dir}/task.json" ]
+    [ -f "${task_dir}/plan.md" ]
+    [ -f "${task_dir}/commands.jsonl" ]
+    [ -f "${task_dir}/changes.patch" ]
+    [ -f "${task_dir}/summary.md" ]
+
+    # Verify task.json has completed status
+    run jq -r '.status' "${task_dir}/task.json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "completed" ]
+
+    # Verify run.json has correct counter
+    local run_dir
+    run_dir=$(find .curb/runs -type d -name "lifecycle-test-*" | head -1)
+    run jq -r '.tasks_completed' "${run_dir}/run.json"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
 }

@@ -15,6 +15,8 @@
 #   artifacts_capture_plan(task_id, plan_content) - Write plan.md for a task
 #   artifacts_capture_command(task_id, cmd, exit_code, output, duration) - Append to commands.jsonl
 #   artifacts_capture_diff(task_id) - Capture git diff to changes.patch
+#   artifacts_get_path(task_id) - Get absolute path to task artifact directory
+#   artifacts_finalize_task(task_id, status, exit_code, summary_text) - Finalize task and generate summary
 #
 
 # Source dependencies
@@ -477,12 +479,14 @@ artifacts_capture_diff() {
     # Try git diff HEAD first (captures staged + unstaged changes)
     # If HEAD doesn't exist (fresh repo), fall back to git diff (unstaged only)
     local diff_output
-    diff_output=$(git diff HEAD 2>/dev/null)
-    local git_exit_code=$?
+    local git_exit_code
+
+    diff_output=$(git diff HEAD 2>/dev/null) || true
+    git_exit_code=$?
 
     # If HEAD doesn't exist, try without HEAD
     if [[ $git_exit_code -ne 0 ]]; then
-        diff_output=$(git diff 2>&1)
+        diff_output=$(git diff 2>&1) || true
         git_exit_code=$?
     fi
 
@@ -505,6 +509,252 @@ artifacts_capture_diff() {
     if [[ $? -ne 0 ]]; then
         echo "ERROR: Failed to set permissions on ${patch_file}" >&2
         return 1
+    fi
+
+    return 0
+}
+
+# Get the full absolute path to a task's artifact directory
+# Returns the absolute path to the task artifacts directory
+#
+# Args:
+#   $1 - task_id: The task identifier (e.g., "curb-123")
+#
+# Returns:
+#   Absolute path to task directory on success, error on failure
+#
+# Example:
+#   path=$(artifacts_get_path "curb-123")
+artifacts_get_path() {
+    local task_id="$1"
+
+    # Validate required arguments
+    if [[ -z "$task_id" ]]; then
+        echo "ERROR: task_id is required" >&2
+        return 1
+    fi
+
+    # Get task directory path (relative)
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "$task_id")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Convert to absolute path
+    # Use pwd to get the current working directory, then append the relative path
+    local abs_path
+    abs_path="$(pwd)/${task_dir}"
+
+    echo "$abs_path"
+    return 0
+}
+
+# Finalize a task with final status and generate summary
+# Updates task.json with final status, completed_at, exit_code, increments iterations
+# Generates summary.md with human-readable task summary
+# Updates run.json counters (tasks_completed or tasks_failed)
+#
+# Args:
+#   $1 - task_id: The task identifier (e.g., "curb-123")
+#   $2 - status: Final status (e.g., "completed", "failed")
+#   $3 - exit_code: Exit code of the task execution
+#   $4 - summary_text: Optional summary text describing what was done
+#
+# Returns:
+#   0 on success, 1 on failure
+#
+# Example:
+#   artifacts_finalize_task "curb-123" "completed" "0" "All tests passed"
+artifacts_finalize_task() {
+    local task_id="$1"
+    local status="$2"
+    local exit_code="$3"
+    local summary_text="${4:-}"
+
+    # Validate required arguments
+    if [[ -z "$task_id" ]]; then
+        echo "ERROR: task_id is required" >&2
+        return 1
+    fi
+
+    if [[ -z "$status" ]]; then
+        echo "ERROR: status is required" >&2
+        return 1
+    fi
+
+    if [[ -z "$exit_code" ]]; then
+        echo "ERROR: exit_code is required" >&2
+        return 1
+    fi
+
+    # Get task directory path
+    local task_dir
+    task_dir=$(artifacts_get_task_dir "$task_id")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Check if task.json exists
+    local task_json="${task_dir}/task.json"
+    if [[ ! -f "$task_json" ]]; then
+        echo "ERROR: task.json not found at ${task_json}" >&2
+        return 1
+    fi
+
+    # Get current timestamp in ISO 8601 format
+    local completed_at
+    completed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Update task.json with final status, completed_at, exit_code, and increment iterations
+    local updated_json
+    updated_json=$(jq \
+        --arg status "$status" \
+        --arg completed_at "$completed_at" \
+        --argjson exit_code "$exit_code" \
+        '.status = $status | .completed_at = $completed_at | .exit_code = $exit_code | .iterations = (.iterations + 1)' \
+        "$task_json")
+
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to update task.json" >&2
+        return 1
+    fi
+
+    # Write updated JSON back to task.json
+    echo "$updated_json" > "$task_json"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to write updated task.json" >&2
+        return 1
+    fi
+
+    # Generate summary.md
+    local summary_file="${task_dir}/summary.md"
+    local task_title
+    local started_at
+    local duration_seconds=0
+    local duration_text="N/A"
+
+    # Extract task details from task.json
+    task_title=$(jq -r '.title' "$task_json")
+    started_at=$(jq -r '.started_at' "$task_json")
+
+    # Calculate duration if both timestamps are available
+    if [[ -n "$started_at" && -n "$completed_at" ]]; then
+        # Convert ISO 8601 timestamps to epoch seconds
+        local start_epoch
+        local end_epoch
+
+        # macOS uses different date syntax than GNU date
+        if date --version >/dev/null 2>&1; then
+            # GNU date (Linux)
+            start_epoch=$(date -d "$started_at" +%s 2>/dev/null || echo "0")
+            end_epoch=$(date -d "$completed_at" +%s 2>/dev/null || echo "0")
+        else
+            # BSD date (macOS)
+            start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$started_at" +%s 2>/dev/null || echo "0")
+            end_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$completed_at" +%s 2>/dev/null || echo "0")
+        fi
+
+        if [[ "$start_epoch" != "0" && "$end_epoch" != "0" ]]; then
+            duration_seconds=$((end_epoch - start_epoch))
+
+            # Format duration nicely
+            if [[ $duration_seconds -lt 60 ]]; then
+                duration_text="${duration_seconds}s"
+            elif [[ $duration_seconds -lt 3600 ]]; then
+                local minutes=$((duration_seconds / 60))
+                local seconds=$((duration_seconds % 60))
+                duration_text="${minutes}m ${seconds}s"
+            else
+                local hours=$((duration_seconds / 3600))
+                local minutes=$(((duration_seconds % 3600) / 60))
+                duration_text="${hours}h ${minutes}m"
+            fi
+        fi
+    fi
+
+    # Count files changed (from changes.patch)
+    local files_changed="N/A"
+    local patch_file="${task_dir}/changes.patch"
+    if [[ -f "$patch_file" ]]; then
+        # Count unique file paths in the diff (lines starting with +++ or ---)
+        local file_count
+        file_count=$(grep -E '^(\+\+\+|---) ' "$patch_file" | grep -v '/dev/null' | sed 's|^[+-]\{3\} [ab]/||' | sort -u | wc -l | tr -d ' ')
+        if [[ "$file_count" -gt 0 ]]; then
+            files_changed="$file_count"
+        else
+            files_changed="0"
+        fi
+    fi
+
+    # Generate summary.md content
+    local summary_content="# Task Summary: ${task_title}
+
+**Task ID:** ${task_id}
+**Status:** ${status}
+**Exit Code:** ${exit_code}
+**Duration:** ${duration_text}
+**Files Changed:** ${files_changed}
+
+## Summary
+
+${summary_text:-No summary provided.}
+
+## Timeline
+
+- **Started:** ${started_at}
+- **Completed:** ${completed_at}
+"
+
+    # Write summary.md
+    echo "$summary_content" > "$summary_file"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to write summary.md" >&2
+        return 1
+    fi
+
+    # Set file permissions to 600 (owner read/write only)
+    chmod 600 "$summary_file"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Failed to set permissions on ${summary_file}" >&2
+        return 1
+    fi
+
+    # Update run.json counters
+    local run_dir
+    run_dir=$(artifacts_get_run_dir)
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    local run_json="${run_dir}/run.json"
+    if [[ -f "$run_json" ]]; then
+        # Increment tasks_completed or tasks_failed counter
+        local counter_field
+        if [[ "$status" == "completed" ]]; then
+            counter_field="tasks_completed"
+        else
+            counter_field="tasks_failed"
+        fi
+
+        # Update run.json - initialize counter if it doesn't exist, otherwise increment
+        local updated_run_json
+        updated_run_json=$(jq \
+            --arg field "$counter_field" \
+            'if has($field) then .[$field] = (.[$field] + 1) else .[$field] = 1 end' \
+            "$run_json")
+
+        if [[ $? -ne 0 ]]; then
+            echo "ERROR: Failed to update run.json counters" >&2
+            return 1
+        fi
+
+        # Write updated run.json
+        echo "$updated_run_json" > "$run_json"
+        if [[ $? -ne 0 ]]; then
+            echo "ERROR: Failed to write updated run.json" >&2
+            return 1
+        fi
     fi
 
     return 0
