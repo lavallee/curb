@@ -8,14 +8,15 @@ load test_helper
 setup() {
     setup_test_dir
 
-    # Source the hooks library
-    source "${PROJECT_ROOT}/lib/hooks.sh"
-
-    # Override curb_config_dir to use test directory
+    # Override curb_config_dir BEFORE sourcing hooks.sh
+    # This ensures hooks.sh uses our test directory
     curb_config_dir() {
         echo "$TEST_DIR/.config/curb"
     }
     export -f curb_config_dir
+
+    # Source the hooks library (will use our curb_config_dir)
+    source "${PROJECT_ROOT}/lib/hooks.sh"
 
     # Create config directory
     mkdir -p "$(curb_config_dir)"
@@ -54,7 +55,7 @@ create_hook() {
     fi
 
     mkdir -p "$hook_dir"
-    echo "$script_content" > "$hook_dir/$script_name"
+    printf '%s\n' "$script_content" > "$hook_dir/$script_name"
     chmod +x "$hook_dir/$script_name"
 }
 
@@ -66,9 +67,7 @@ create_hook() {
 
 # Test: hooks_run executes script in global directory
 @test "hooks_run executes script in global directory" {
-    create_hook "pre-task" "01-test.sh" '#!/bin/bash
-echo "Hook executed"
-exit 0' "global"
+    create_hook "pre-task" "01-test.sh" $'#!/bin/bash\necho "Hook executed"\nexit 0' "global"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -77,9 +76,7 @@ exit 0' "global"
 
 # Test: hooks_run executes script in project directory
 @test "hooks_run executes script in project directory" {
-    create_hook "pre-task" "01-test.sh" '#!/bin/bash
-echo "Project hook executed"
-exit 0' "project"
+    create_hook "pre-task" "01-test.sh" $'#!/bin/bash\necho "Project hook executed"\nexit 0' "project"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -88,17 +85,11 @@ exit 0' "project"
 
 # Test: hooks_run executes scripts in sorted order
 @test "hooks_run executes scripts in sorted order" {
-    create_hook "pre-task" "02-second.sh" '#!/bin/bash
-echo "Second"
-exit 0' "global"
+    create_hook "pre-task" "02-second.sh" $'#!/bin/bash\necho \"Second\"\nexit 0' \"global\"
 
-    create_hook "pre-task" "01-first.sh" '#!/bin/bash
-echo "First"
-exit 0' "global"
+    create_hook "pre-task" "01-first.sh" $'#!/bin/bash\necho \"First\"\nexit 0' \"global\"
 
-    create_hook "pre-task" "03-third.sh" '#!/bin/bash
-echo "Third"
-exit 0' "global"
+    create_hook "pre-task" "03-third.sh" $'#!/bin/bash\necho \"Third\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -117,9 +108,7 @@ exit 0' "global"
 
 # Test: hooks_run exports CURB_HOOK_NAME
 @test "hooks_run exports CURB_HOOK_NAME" {
-    create_hook "pre-task" "01-test.sh" '#!/bin/bash
-echo "Hook name: $CURB_HOOK_NAME"
-exit 0' "global"
+    create_hook "pre-task" "01-test.sh" $'#!/bin/bash\necho \"Hook name: $CURB_HOOK_NAME\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -128,9 +117,7 @@ exit 0' "global"
 
 # Test: hooks_run exports CURB_PROJECT_DIR
 @test "hooks_run exports CURB_PROJECT_DIR" {
-    create_hook "pre-task" "01-test.sh" '#!/bin/bash
-echo "Project dir: $CURB_PROJECT_DIR"
-exit 0' "global"
+    create_hook "pre-task" "01-test.sh" $'#!/bin/bash\necho \"Project dir: $CURB_PROJECT_DIR\"\nexit 0' \"global\"
 
     export CURB_PROJECT_DIR="$TEST_DIR"
     run hooks_run "pre-task"
@@ -154,9 +141,7 @@ exit 0' "global"
 
 # Test: hooks_set_task_context exports exit code
 @test "hooks_set_task_context exports exit code" {
-    create_hook "post-task" "01-test.sh" '#!/bin/bash
-echo "Exit code: $CURB_EXIT_CODE"
-exit 0' "global"
+    create_hook "post-task" "01-test.sh" $'#!/bin/bash\necho \"Exit code: $CURB_EXIT_CODE\"\nexit 0' \"global\"
 
     hooks_set_task_context "test-001" "Test Task" "42"
     run hooks_run "post-task"
@@ -180,9 +165,7 @@ exit 0' "global"
 
 # Test: hooks_run passes arguments to scripts
 @test "hooks_run passes arguments to scripts" {
-    create_hook "pre-task" "01-test.sh" '#!/bin/bash
-echo "Args: $@"
-exit 0' "global"
+    create_hook "pre-task" "01-test.sh" $'#!/bin/bash\necho \"Args: $@\"\nexit 0' \"global\"
 
     run hooks_run "pre-task" "arg1" "arg2" "arg3"
     [ "$status" -eq 0 ]
@@ -191,13 +174,9 @@ exit 0' "global"
 
 # Test: hook failure logged when fail_fast is false (default)
 @test "hook failure logged but doesn't stop execution when fail_fast is false" {
-    create_hook "pre-task" "01-fail.sh" '#!/bin/bash
-echo "Failing hook"
-exit 1' "global"
+    create_hook "pre-task" "01-fail.sh" $'#!/bin/bash\necho \"Failing hook\"\nexit 1' \"global\"
 
-    create_hook "pre-task" "02-success.sh" '#!/bin/bash
-echo "Success hook"
-exit 0' "global"
+    create_hook "pre-task" "02-success.sh" $'#!/bin/bash\necho \"Success hook\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]  # Should still succeed with fail_fast=false
@@ -218,13 +197,9 @@ exit 0' "global"
 EOF
     config_load
 
-    create_hook "pre-task" "01-fail.sh" '#!/bin/bash
-echo "Failing hook"
-exit 1' "global"
+    create_hook "pre-task" "01-fail.sh" $'#!/bin/bash\necho \"Failing hook\"\nexit 1' \"global\"
 
-    create_hook "pre-task" "02-success.sh" '#!/bin/bash
-echo "Success hook"
-exit 0' "global"
+    create_hook "pre-task" "02-success.sh" $'#!/bin/bash\necho \"Success hook\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 1 ]  # Should fail with fail_fast=true
@@ -250,9 +225,7 @@ echo "Should not execute"' > "$hook_dir/01-not-executable.sh"
     # Don't chmod +x
 
     # Create executable file
-    create_hook "pre-task" "02-executable.sh" '#!/bin/bash
-echo "Should execute"
-exit 0' "global"
+    create_hook "pre-task" "02-executable.sh" $'#!/bin/bash\necho \"Should execute\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -262,13 +235,9 @@ exit 0' "global"
 
 # Test: both global and project hooks are executed
 @test "both global and project hooks are executed" {
-    create_hook "pre-task" "01-global.sh" '#!/bin/bash
-echo "Global hook"
-exit 0' "global"
+    create_hook "pre-task" "01-global.sh" $'#!/bin/bash\necho \"Global hook\"\nexit 0' \"global\"
 
-    create_hook "pre-task" "02-project.sh" '#!/bin/bash
-echo "Project hook"
-exit 0' "project"
+    create_hook "pre-task" "02-project.sh" $'#!/bin/bash\necho \"Project hook\"\nexit 0' \"project\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -426,13 +395,9 @@ exit 0' "project"
 
 # Test: AC - hooks_run "pre-task" executes scripts in pre-task.d/
 @test "AC: hooks_run executes all scripts in pre-task.d/" {
-    create_hook "pre-task" "01-first.sh" '#!/bin/bash
-echo "First script"
-exit 0' "global"
+    create_hook "pre-task" "01-first.sh" $'#!/bin/bash\necho \"First script\"\nexit 0' \"global\"
 
-    create_hook "pre-task" "02-second.sh" '#!/bin/bash
-echo "Second script"
-exit 0' "global"
+    create_hook "pre-task" "02-second.sh" $'#!/bin/bash\necho \"Second script\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
@@ -469,13 +434,9 @@ exit 1' "global"
 
 # Test: AC - Scripts run in sorted order
 @test "AC: scripts run in sorted order (01-first.sh before 02-second.sh)" {
-    create_hook "pre-task" "02-second.sh" '#!/bin/bash
-echo "SECOND"
-exit 0' "global"
+    create_hook "pre-task" "02-second.sh" $'#!/bin/bash\necho \"SECOND\"\nexit 0' \"global\"
 
-    create_hook "pre-task" "01-first.sh" '#!/bin/bash
-echo "FIRST"
-exit 0' "global"
+    create_hook "pre-task" "01-first.sh" $'#!/bin/bash\necho \"FIRST\"\nexit 0' \"global\"
 
     run hooks_run "pre-task"
     [ "$status" -eq 0 ]
