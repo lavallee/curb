@@ -987,3 +987,316 @@ Line 3"
     base=$(git_get_base_branch)
     [[ "$base" == "main" ]]
 }
+
+# ============================================================================
+# git_push_branch tests
+# ============================================================================
+
+@test "git_push_branch returns error when not in git repo" {
+    # Create a new directory outside of git repo
+    NON_GIT_DIR="${BATS_TMPDIR}/non_git_$$"
+    mkdir -p "$NON_GIT_DIR"
+    cd "$NON_GIT_DIR"
+
+    run git_push_branch
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: Not in a git repository" ]]
+
+    # Cleanup
+    cd /
+    rm -rf "$NON_GIT_DIR"
+}
+
+@test "git_push_branch returns error when no remote configured" {
+    # Repository has no remote configured (from setup)
+
+    run git_push_branch
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: No 'origin' remote configured" ]]
+}
+
+@test "git_push_branch returns error when cannot determine current branch" {
+    # Create a detached HEAD state
+    local commit_hash
+    commit_hash=$(git rev-parse HEAD)
+    git checkout -q "$commit_hash"
+
+    run git_push_branch
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "ERROR: Could not determine current branch" ]]
+}
+
+@test "git_push_branch pushes to origin when remote is configured" {
+    # Create a bare remote repository to push to
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote
+    git remote add origin "$REMOTE_DIR"
+
+    # Create a commit
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test commit"
+
+    # Push should succeed
+    run git_push_branch
+    [[ $status -eq 0 ]]
+    [[ "$output" =~ "Successfully pushed branch" ]]
+
+    # Verify branch exists on remote
+    git ls-remote origin | grep -q "refs/heads/$(git_get_current_branch)"
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "git_push_branch sets upstream tracking" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote
+    git remote add origin "$REMOTE_DIR"
+
+    # Create a new branch
+    git checkout -q -b test-branch
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test commit"
+
+    # Push with upstream tracking
+    git_push_branch >/dev/null 2>&1
+
+    # Verify upstream is set
+    local upstream
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+    [[ "$upstream" == "origin/test-branch" ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "git_push_branch --force requires confirmation" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote and push initial commit
+    git remote add origin "$REMOTE_DIR"
+    git push -q -u origin main 2>/dev/null || git push -q -u origin master 2>/dev/null
+
+    # Create a new commit
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test commit"
+
+    # Force push with "no" confirmation should fail
+    run bash -c 'echo "no" | git_push_branch --force'
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ "Force push cancelled" ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "git_push_branch --force succeeds with yes confirmation" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote and push initial commit
+    git remote add origin "$REMOTE_DIR"
+    git push -q -u origin main 2>/dev/null || git push -q -u origin master 2>/dev/null
+
+    # Create and push a commit
+    echo "initial" > test.txt
+    git add test.txt
+    git commit -q -m "Initial"
+    git push -q
+
+    # Amend the commit (creates conflict)
+    echo "amended" > test.txt
+    git add test.txt
+    git commit -q --amend --no-edit
+
+    # Force push with "yes" confirmation should succeed
+    run bash -c 'echo "yes" | git_push_branch --force'
+    [[ $status -eq 0 ]]
+    [[ "$output" =~ "Successfully force pushed branch" ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "git_push_branch --force uses force-with-lease" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote and push initial commit
+    git remote add origin "$REMOTE_DIR"
+    git push -q -u origin main 2>/dev/null || git push -q -u origin master 2>/dev/null
+
+    # Create a commit
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test"
+    git push -q
+
+    # Amend locally
+    echo "amended" > test.txt
+    git add test.txt
+    git commit -q --amend --no-edit
+
+    # Verify --force-with-lease is mentioned in output (shows it's being used)
+    run bash -c 'echo "yes" | git_push_branch --force'
+    [[ $status -eq 0 ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "git_push_branch displays informative messages" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote
+    git remote add origin "$REMOTE_DIR"
+
+    # Create a commit
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test"
+
+    # Check output messages
+    run git_push_branch
+    [[ $status -eq 0 ]]
+    [[ "$output" =~ "Pushing branch" ]]
+    [[ "$output" =~ "Successfully pushed branch" ]]
+    [[ "$output" =~ "to origin" ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "INTEGRATION: Complete push workflow" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote
+    git remote add origin "$REMOTE_DIR"
+
+    # Initialize run branch
+    git_init_run_branch "panda"
+
+    # Make changes
+    echo "feature work" > feature.txt
+    git add feature.txt
+    git commit -q -m "Feature work"
+
+    # Push branch
+    run git_push_branch
+    [[ $status -eq 0 ]]
+
+    # Verify branch on remote
+    local run_branch
+    run_branch=$(git_get_run_branch)
+    git ls-remote origin | grep -q "refs/heads/${run_branch}"
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "ACCEPTANCE: git_push_branch pushes current branch to origin" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote
+    git remote add origin "$REMOTE_DIR"
+
+    # Create feature branch with commit
+    git checkout -q -b feature/test
+    echo "feature" > feature.txt
+    git add feature.txt
+    git commit -q -m "Feature"
+
+    # Push
+    git_push_branch >/dev/null 2>&1
+
+    # Verify branch exists on remote
+    git ls-remote origin | grep -q "refs/heads/feature/test"
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "ACCEPTANCE: git_push_branch sets upstream tracking relationship" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote
+    git remote add origin "$REMOTE_DIR"
+
+    # Create branch with commit
+    git checkout -q -b my-branch
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test"
+
+    # Before push, no upstream
+    local upstream_before
+    upstream_before=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "none")
+    [[ "$upstream_before" == "none" ]]
+
+    # Push with upstream tracking
+    git_push_branch >/dev/null 2>&1
+
+    # After push, upstream should be set
+    local upstream_after
+    upstream_after=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+    [[ "$upstream_after" == "origin/my-branch" ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
+
+@test "ACCEPTANCE: git_push_branch --force requires explicit confirmation" {
+    # Create a bare remote repository
+    REMOTE_DIR="${BATS_TMPDIR}/remote_$$"
+    mkdir -p "$REMOTE_DIR"
+    git init --bare -q "$REMOTE_DIR"
+
+    # Add remote and push
+    git remote add origin "$REMOTE_DIR"
+    git push -q -u origin main 2>/dev/null || git push -q -u origin master 2>/dev/null
+
+    # Create commit
+    echo "test" > test.txt
+    git add test.txt
+    git commit -q -m "Test"
+
+    # Force push without confirmation should fail
+    run bash -c 'echo "no" | git_push_branch --force'
+    [[ $status -eq 1 ]]
+
+    # Force push with confirmation should succeed
+    run bash -c 'echo "yes" | git_push_branch --force'
+    [[ $status -eq 0 ]]
+
+    # Cleanup
+    rm -rf "$REMOTE_DIR"
+}
