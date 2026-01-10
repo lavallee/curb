@@ -608,3 +608,67 @@ Phase 1 validation complete. Ready to proceed to Phase 2: Reliability
 - Clean state verification (require commits, optional test runs)
 - Budget tracking and enforcement
 - Budget warnings at threshold
+
+## Session 10: Epic/Label Filtering and Beads Integration (curb-zlk)
+
+### Task: Add epic and label targeting, fix beads integration issues
+- **Status**: COMPLETED
+- **Date**: 2026-01-09
+
+### What was implemented:
+
+1. **Epic and Label Filtering**
+   - Added `--epic <id>` flag to target tasks within a specific epic
+   - Added `--label <name>` flag to target tasks with a specific label
+   - Both flags can be combined (AND logic)
+   - Works with both beads and JSON backends
+   - Environment variables: `CURB_EPIC`, `CURB_LABEL`
+   - Leverages beads CLI's native `--parent` and `--label` flags
+
+2. **Per-Task Model Selection**
+   - Tasks with `model:X` labels (e.g., `model:haiku`, `model:sonnet`) auto-select the model
+   - Main loop extracts model label and sets `CURB_MODEL` before harness invocation
+   - Only applies to Claude harness (other harnesses may not support model selection)
+
+3. **Beads Backend Fixes**
+   - Fixed hardcoded `prd.json` references that broke beads backend
+   - `run_loop()` now uses `get_remaining_count()` abstraction
+   - `show_status()` now uses `get_task_counts()` abstraction
+   - `show_ready()` checks backend before JSON validation
+   - Added `get_remaining_count()` and `is_task_ready()` unified interfaces
+
+4. **Blocked Task Detection**
+   - Before resuming in-progress task, verify it's not blocked
+   - If blocked (dependencies reopened), reset to open status
+   - Added `beads_is_task_ready()` using `bd ready --json` output
+   - Added `json_is_task_ready()` for JSON backend
+
+5. **Filter Support in In-Progress Detection**
+   - `get_in_progress_task()` now accepts epic and label filters
+   - Ensures in-progress task within filter scope is found correctly
+   - Updated beads and JSON implementations
+
+### Files Modified:
+- `curb` - Main script: flag parsing, filter passing, model extraction
+- `lib/tasks.sh` - Unified interface: filter parameters, new functions
+- `lib/beads.sh` - Beads wrapper: filter support, ready checks
+
+### Learnings:
+
+- **Backend abstraction is critical**: All task queries should go through lib/tasks.sh, never directly to prd.json or bd CLI. This ensures both backends work correctly.
+
+- **Filter parameters flow through the stack**: Epic and label filters need to be passed from CLI → run_iteration → get_ready_tasks → backend implementation.
+
+- **Beads CLI is powerful**: `bd ready --parent X --label Y` does all the heavy lifting for filtering. We just expose it through curb's interface.
+
+- **Model labels are task metadata, not filters**: The `model:X` label is read FROM the task, not used to filter tasks. It's extracted after task selection.
+
+- **Guard against blocked resumption**: If a task's dependencies are reopened, the in-progress task becomes blocked. Must check before resuming.
+
+### Updated Documentation:
+- README.md: Added filtering usage, model labels, environment variables, configuration section, logging section, updated files reference
+- CONTRIBUTING.md: Updated architecture diagram, required backend functions, model label support, test commands
+
+### Test Coverage:
+- All 189 existing BATS tests continue to PASS
+- Manual testing verified filtering with beads backend works correctly

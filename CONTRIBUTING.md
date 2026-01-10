@@ -4,18 +4,23 @@ This guide explains how to extend curb with new AI harnesses, task backends, and
 
 ## Architecture Overview
 
-Curb uses a modular architecture with two main abstraction layers:
+Curb uses a modular architecture with abstraction layers:
 
 ```
-┌─────────────────────────────────────────┐
-│                  curb                    │
-│            (main loop logic)             │
-├────────────────────┬────────────────────┤
-│   lib/harness.sh   │   lib/tasks.sh     │
-│  (AI CLI wrapper)  │  (task backend)    │
-├────────────────────┼────────────────────┤
-│ claude │   codex   │  beads  │   json   │
-└────────────────────┴────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                         curb                              │
+│                   (main loop logic)                       │
+├────────────────────┬─────────────────────────────────────┤
+│   lib/harness.sh   │   lib/tasks.sh                      │
+│  (AI CLI wrapper)  │  (task backend)                     │
+├────────────────────┼─────────────────────────────────────┤
+│ claude │   codex   │  lib/beads.sh  │  json (inline)     │
+└────────────────────┴─────────────────────────────────────┘
+
+Infrastructure libraries:
+├── lib/xdg.sh      - XDG Base Directory paths
+├── lib/config.sh   - Configuration loading (global + project)
+└── lib/logger.sh   - Structured JSONL logging
 ```
 
 ## Adding a New AI Harness
@@ -176,14 +181,19 @@ Each backend must implement these functions:
 
 | Function | Purpose |
 |----------|---------|
-| `get_ready_tasks` | Return JSON array of unblocked, open tasks |
-| `get_task` | Get single task by ID |
-| `update_task_status` | Change task status |
-| `add_task_note` | Append note to task |
-| `create_task` | Create new task |
-| `get_task_counts` | Return counts by status |
-| `all_tasks_complete` | Check if all tasks closed |
-| `get_blocked_tasks` | Return blocked tasks |
+| `get_ready_tasks(prd, epic, label)` | Return JSON array of unblocked, open tasks (with optional filters) |
+| `get_in_progress_task(prd, epic, label)` | Get in-progress task (with optional filters) |
+| `get_task(id)` | Get single task by ID |
+| `is_task_ready(prd, id)` | Check if task is unblocked |
+| `update_task_status(prd, id, status)` | Change task status |
+| `add_task_note(prd, id, note)` | Append note to task |
+| `create_task(prd, json)` | Create new task |
+| `get_task_counts(prd)` | Return counts by status |
+| `get_remaining_count(prd)` | Count of non-closed tasks |
+| `all_tasks_complete(prd)` | Check if all tasks closed |
+| `get_blocked_tasks(prd)` | Return blocked tasks |
+
+Task JSON should include a `labels` array for filtering and model selection.
 
 ### 4. Wire Up Unified Interface
 
@@ -192,13 +202,27 @@ Add cases to each function in `lib/tasks.sh`:
 ```bash
 get_ready_tasks() {
     local prd="$1"
+    local epic="${2:-}"
+    local label="${3:-}"
 
     case "$(get_backend)" in
         # ... existing cases ...
         mybackend)
-            mybackend_get_ready_tasks
+            mybackend_get_ready_tasks "$epic" "$label"
             ;;
     esac
+}
+```
+
+### 5. Support Model Labels
+
+Tasks with `model:X` labels (e.g., `model:haiku`, `model:sonnet`) trigger automatic model selection. The main loop extracts this label and sets `CURB_MODEL` before invoking the harness. Your backend should include labels in the task JSON output:
+
+```json
+{
+  "id": "task-123",
+  "title": "Quick fix",
+  "labels": ["phase-1", "model:haiku"]
 }
 ```
 
@@ -219,6 +243,18 @@ The system prompt sent with every iteration. Should include:
 Project-specific instructions. Updated by the agent as it learns.
 
 ## Testing Changes
+
+### Run Test Suite
+
+```bash
+# Run all tests (requires bats)
+bats tests/
+
+# Run specific test file
+bats tests/config.bats
+bats tests/logger.bats
+bats tests/xdg.bats
+```
 
 ### Test Harness Invocation
 
@@ -241,6 +277,19 @@ curb --dump-prompt
 ```
 
 Saves system and task prompts to files for manual testing.
+
+### Test with Filters
+
+```bash
+# Test epic filtering
+curb --epic my-epic-id --ready
+
+# Test label filtering
+curb --label phase-1 --status
+
+# Test combined filters
+curb --epic curb-1gq --label phase-1 --once --debug
+```
 
 ## Code Style
 
