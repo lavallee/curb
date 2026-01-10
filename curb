@@ -52,6 +52,126 @@ cmd_version() {
     return 0
 }
 
+# Init subcommand - initialize a project
+cmd_init() {
+    local target_dir="${1:-.}"
+    exec "${CURB_DIR}/curb-init" "$target_dir"
+}
+
+# Run subcommand - run the main loop
+cmd_run() {
+    validate_project
+    run_loop
+}
+
+# Status subcommand - show task status
+cmd_status() {
+    validate_project
+    show_status
+}
+
+# Explain subcommand - show details about a task or session
+cmd_explain() {
+    local target="${1:-}"
+    if [[ -z "$target" ]]; then
+        _log_error_console "Usage: curb explain <task-id|session-id>"
+        return 1
+    fi
+
+    # Check if it's a task ID or session ID
+    local backend=$(get_backend "${PROJECT_DIR}")
+
+    # Try to get task first
+    local prd="${PROJECT_DIR}/prd.json"
+    local task
+    task=$(get_task "$prd" "$target" 2>/dev/null)
+
+    if [[ -n "$task" && "$task" != "null" ]]; then
+        # Found a task - show task details
+        echo "$task" | jq -r '
+            "Task: \(.id)",
+            "Title: \(.title)",
+            "Type: \(.type)",
+            "Status: \(.status)",
+            "Priority: \(.priority // "normal")",
+            "",
+            "Description:",
+            "\(.description)",
+            "",
+            (if .acceptanceCriteria then "Acceptance Criteria:\n- " + (.acceptanceCriteria | join("\n- ")) else "" end),
+            (if .dependsOn then "\nDepends on: " + (.dependsOn | join(", ")) else "" end),
+            (if .labels then "\nLabels: " + (.labels | join(", ")) else "" end)
+        '
+    else
+        # Not a task, maybe a session? (future implementation)
+        _log_error_console "Task or session not found: ${target}"
+        return 1
+    fi
+}
+
+# Artifacts subcommand - manage artifacts
+cmd_artifacts() {
+    local subcommand="${1:-list}"
+    shift || true
+
+    case "$subcommand" in
+        list)
+            # List all runs with artifacts
+            local curb_dir
+            curb_dir=$(artifacts_get_curb_dir)
+            if [[ ! -d "$curb_dir/runs" ]]; then
+                log_info "No artifacts found"
+                return 0
+            fi
+
+            log_info "Available runs:"
+            for run_dir in "$curb_dir/runs"/*; do
+                if [[ -d "$run_dir" && -f "$run_dir/run.json" ]]; then
+                    local run_name=$(basename "$run_dir")
+                    local start_time=$(jq -r '.started_at // "unknown"' "$run_dir/run.json")
+                    echo "  ${run_name} (started: ${start_time})"
+                fi
+            done
+            ;;
+        show)
+            local run_id="$1"
+            if [[ -z "$run_id" ]]; then
+                _log_error_console "Usage: curb artifacts show <run-id>"
+                return 1
+            fi
+
+            local curb_dir
+            curb_dir=$(artifacts_get_curb_dir)
+            local run_dir="$curb_dir/runs/$run_id"
+
+            if [[ ! -d "$run_dir" ]]; then
+                _log_error_console "Run not found: ${run_id}"
+                return 1
+            fi
+
+            log_info "Run: ${run_id}"
+            if [[ -f "$run_dir/run.json" ]]; then
+                jq -r '"Started: \(.started_at)\nStatus: \(.status // "unknown")"' "$run_dir/run.json"
+            fi
+
+            echo ""
+            log_info "Tasks:"
+            for task_dir in "$run_dir/tasks"/*; do
+                if [[ -d "$task_dir" && -f "$task_dir/task.json" ]]; then
+                    local task_id=$(basename "$task_dir")
+                    local task_status=$(jq -r '.status // "unknown"' "$task_dir/task.json")
+                    echo "  ${task_id}: ${task_status}"
+                fi
+            done
+            ;;
+        *)
+            _log_error_console "Unknown artifacts subcommand: ${subcommand}"
+            _log_error_console "Available: list, show <run-id>"
+            return 1
+            ;;
+    esac
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -930,14 +1050,59 @@ main() {
         fi
     fi
 
-    # Subcommand dispatcher (check for subcommands before flags)
-    case "${args[0]:-}" in
-        version)
-            cmd_version
-            return $?
-            ;;
-    esac
+    # Subcommand dispatcher (check for subcommands before legacy flags)
+    # Process first non-flag argument as potential subcommand
+    local first_arg="${args[0]:-}"
 
+    # Check if first arg is a subcommand (not a flag)
+    if [[ -n "$first_arg" && ! "$first_arg" =~ ^-- ]]; then
+        case "$first_arg" in
+            init)
+                # Pass remaining args to cmd_init
+                cmd_init "${args[@]:1}"
+                return $?
+                ;;
+            run)
+                # Run the main loop
+                cmd_run
+                return $?
+                ;;
+            status)
+                # Show task status
+                cmd_status
+                return $?
+                ;;
+            explain)
+                # Explain a task or session
+                cmd_explain "${args[@]:1}"
+                return $?
+                ;;
+            artifacts)
+                # Manage artifacts
+                cmd_artifacts "${args[@]:1}"
+                return $?
+                ;;
+            version)
+                # Show version
+                cmd_version
+                return $?
+                ;;
+            help)
+                # Show help (fall through to --help handling below)
+                args=("--help")
+                ;;
+            *)
+                # Unknown subcommand - show error and help
+                if [[ "$first_arg" != --* ]]; then
+                    _log_error_console "Unknown subcommand: ${first_arg}"
+                    echo ""
+                    args=("--help")
+                fi
+                ;;
+        esac
+    fi
+
+    # Legacy flag parsing (for backwards compatibility)
     case "${args[0]:-}" in
         --status|-s)
             validate_project
